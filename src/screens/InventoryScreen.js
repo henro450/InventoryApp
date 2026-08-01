@@ -19,7 +19,7 @@ export default function InventoryScreen({ navigation, route }) {
 
   const loadLocal = useCallback(() => {
     setItems(getLocalItems(viewingCompanyId));
-    setPendingCount(getPendingCount());
+    setPendingCount(getPendingCount(user.id));
   }, [viewingCompanyId]);
 
   useFocusEffect(

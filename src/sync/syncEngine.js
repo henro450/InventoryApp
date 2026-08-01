@@ -1,4 +1,5 @@
 import * as Network from 'expo-network';
+import NetInfo from '@react-native-community/netinfo';
 import { api } from '../api/client';
 import {
   getPendingTransactions,
@@ -10,15 +11,18 @@ import {
   getLastSyncedAt,
   setLastSyncedAt,
   upsertLocalItem,
+  getLocalItemSyncStatus,
 } from '../db/localDb';
 
 let syncInProgress = false;
 
-// SYNC-03/SYNC-05: called whenever connectivity is regained (see useSyncOnReconnect hook)
-// or on a periodic timer. Pushes pending items, then pending transactions (in that order,
-// since a transaction for an offline-created item needs that item's server id first), then
-// pulls down anything new from the server. Safe to call repeatedly — records already synced
-// are skipped by the server's dedupe checks on clientItemId / clientTransactionId.
+// SYNC-03/SYNC-05: triggered by two things — a NetInfo listener that fires immediately on an
+// offline->online transition (see startConnectivityWatcher), and a periodic timer as a
+// fallback in case a transition is missed (e.g. state changed while the app was backgrounded).
+// Pushes pending items, then pending transactions (in that order, since a transaction for an
+// offline-created item needs that item's server id first), then pulls down anything new from
+// the server. Safe to call repeatedly — records already synced are skipped by the server's
+// dedupe checks on clientItemId / clientTransactionId.
 export async function runSync(userId) {
   if (syncInProgress) return { skipped: true };
   syncInProgress = true;
@@ -111,9 +115,17 @@ export async function runSync(userId) {
     const pulled = await api.syncPull(since);
 
     for (const item of pulled.items) {
+      const localId = item.clientItemId || `server-${item.id}`; // keep client-generated items on their original localId
+      const localStatus = getLocalItemSyncStatus(localId);
+
+      // SYNC-08: a local edit is still queued (or just failed) for this item — a stale pull
+      // must not silently clobber it. It gets its own chance to push this run or a later one;
+      // once it syncs, a subsequent pull will correctly reflect merged server state.
+      if (localStatus === 'pending' || localStatus === 'failed') continue;
+
       upsertLocalItem({
         id: item.id,
-        localId: item.clientItemId || `server-${item.id}`, // keep client-generated items on their original localId
+        localId,
         clientItemId: item.clientItemId,
         sku: item.sku,
         name: item.name,
@@ -145,12 +157,27 @@ export async function runSync(userId) {
   }
 }
 
-// Call this once near app startup to sync periodically. (A production build would use
-// Network.addNetworkStateListener; this simple polling version keeps the example
-// dependency-light and easy to follow.)
+// Call this once near app startup. SYNC-03: subscribes to real connectivity-change events via
+// NetInfo and fires runSync immediately on an offline->online transition, so the user isn't
+// stuck waiting for the next poll tick after reconnecting. The interval poll is kept as a
+// fallback in case a transition is missed (e.g. the app was backgrounded through it).
 export function startConnectivityWatcher(userId, intervalMs = 15000) {
+  let wasOffline = false;
+
+  const unsubscribeListener = NetInfo.addEventListener((state) => {
+    const isOnline = !!(state.isConnected && state.isInternetReachable);
+    if (isOnline && wasOffline) {
+      runSync(userId);
+    }
+    wasOffline = !isOnline;
+  });
+
   const interval = setInterval(() => {
     runSync(userId);
   }, intervalMs);
-  return () => clearInterval(interval);
+
+  return () => {
+    unsubscribeListener();
+    clearInterval(interval);
+  };
 }

@@ -54,6 +54,10 @@ export function initLocalDb() {
   tryAddColumn('items', 'userId INTEGER');
   tryAddColumn('stock_transactions', 'userId INTEGER');
   tryAddColumn('items', 'isActive INTEGER DEFAULT 1');
+  tryAddColumn('items', 'retryCount INTEGER DEFAULT 0');
+  tryAddColumn('items', 'nextRetryAt TEXT');
+  tryAddColumn('stock_transactions', 'retryCount INTEGER DEFAULT 0');
+  tryAddColumn('stock_transactions', 'nextRetryAt TEXT');
 }
 
 function tryAddColumn(table, columnDef) {
@@ -62,6 +66,14 @@ function tryAddColumn(table, columnDef) {
   } catch {
     // column already exists
   }
+}
+
+// SYNC-05: exponential backoff for failed syncs — 30s, 60s, 120s, 240s, 480s, capped at 10min.
+// Uncapped retries (no permanent give-up): this is a low-frequency, small-payload background
+// process, so a permanently-broken record just sits retrying every ~10min at negligible cost.
+function computeNextRetryAt(retryCount) {
+  const delaySeconds = Math.min(30 * Math.pow(2, retryCount - 1), 600);
+  return new Date(Date.now() + delaySeconds * 1000).toISOString();
 }
 
 export function getDb() {
@@ -120,15 +132,32 @@ export function getLocalItems(companyId) {
 }
 
 export function getPendingItems(userId) {
-  return db.getAllSync("SELECT * FROM items WHERE syncStatus = 'pending' AND userId = ?", [userId]);
+  const now = new Date().toISOString();
+  return db.getAllSync(
+    `SELECT * FROM items
+     WHERE userId = ?
+       AND (
+         syncStatus = 'pending'
+         OR (syncStatus = 'failed' AND (nextRetryAt IS NULL OR nextRetryAt <= ?))
+       )`,
+    [userId, now]
+  );
 }
 
 export function markItemSynced(localId, serverId) {
-  db.runSync("UPDATE items SET id = ?, syncStatus = 'synced' WHERE localId = ?", [serverId, localId]);
+  db.runSync(
+    "UPDATE items SET id = ?, syncStatus = 'synced', retryCount = 0, nextRetryAt = NULL WHERE localId = ?",
+    [serverId, localId]
+  );
 }
 
 export function markItemFailed(localId) {
-  db.runSync("UPDATE items SET syncStatus = 'failed' WHERE localId = ?", [localId]);
+  const row = db.getFirstSync('SELECT retryCount FROM items WHERE localId = ?', [localId]);
+  const retryCount = (row?.retryCount ?? 0) + 1;
+  db.runSync(
+    "UPDATE items SET syncStatus = 'failed', retryCount = ?, nextRetryAt = ? WHERE localId = ?",
+    [retryCount, computeNextRetryAt(retryCount), localId]
+  );
 }
 
 // Resolves the current server id for an item given its localId — stock transactions
@@ -136,6 +165,13 @@ export function markItemFailed(localId) {
 export function getServerIdForLocalItem(localId) {
   const row = db.getFirstSync('SELECT id FROM items WHERE localId = ?', [localId]);
   return row ? row.id : null;
+}
+
+// SYNC-08: lets the pull loop check whether a local unsynced edit is in flight before
+// deciding whether a pulled (possibly stale) server row is safe to apply.
+export function getLocalItemSyncStatus(localId) {
+  const row = db.getFirstSync('SELECT syncStatus FROM items WHERE localId = ?', [localId]);
+  return row ? row.syncStatus : null; // null => no local row exists yet
 }
 
 // INV-01: hard-deletes an item that never reached the server (id still null) — nothing to
@@ -170,20 +206,34 @@ export function insertLocalTransaction(tx) {
 }
 
 export function getPendingTransactions(userId) {
-  return db.getAllSync("SELECT * FROM stock_transactions WHERE syncStatus = 'pending' AND userId = ?", [userId]);
+  const now = new Date().toISOString();
+  return db.getAllSync(
+    `SELECT * FROM stock_transactions
+     WHERE userId = ?
+       AND (
+         syncStatus = 'pending'
+         OR (syncStatus = 'failed' AND (nextRetryAt IS NULL OR nextRetryAt <= ?))
+       )`,
+    [userId, now]
+  );
 }
 
 export function markTransactionSynced(clientTransactionId, serverId) {
   db.runSync(
-    "UPDATE stock_transactions SET syncStatus = 'synced', itemServerId = ? WHERE clientTransactionId = ?",
+    "UPDATE stock_transactions SET syncStatus = 'synced', itemServerId = ?, retryCount = 0, nextRetryAt = NULL WHERE clientTransactionId = ?",
     [serverId, clientTransactionId]
   );
 }
 
 export function markTransactionFailed(clientTransactionId) {
-  db.runSync(
-    "UPDATE stock_transactions SET syncStatus = 'failed' WHERE clientTransactionId = ?",
+  const row = db.getFirstSync(
+    'SELECT retryCount FROM stock_transactions WHERE clientTransactionId = ?',
     [clientTransactionId]
+  );
+  const retryCount = (row?.retryCount ?? 0) + 1;
+  db.runSync(
+    "UPDATE stock_transactions SET syncStatus = 'failed', retryCount = ?, nextRetryAt = ? WHERE clientTransactionId = ?",
+    [retryCount, computeNextRetryAt(retryCount), clientTransactionId]
   );
 }
 
