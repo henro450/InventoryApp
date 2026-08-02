@@ -56,7 +56,15 @@ export const api = {
 
   createTransaction: (payload) => request('/transactions', { method: 'POST', body: payload }),
 
-  getAuditLogs: (companyId) => request(`/audit-logs${companyId ? `?companyId=${companyId}` : ''}`),
+  getAuditLogs: (companyId, { userId, action, from, to } = {}) => {
+    const params = new URLSearchParams();
+    if (companyId) params.set('companyId', companyId);
+    if (userId) params.set('userId', userId);
+    if (action) params.set('action', action);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return request(`/audit-logs?${params.toString()}`);
+  },
 
   getStockOnHandReport: (companyId, { category, itemId } = {}) => {
     const params = new URLSearchParams();
