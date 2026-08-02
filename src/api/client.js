@@ -58,9 +58,30 @@ export const api = {
 
   getAuditLogs: (companyId) => request(`/audit-logs${companyId ? `?companyId=${companyId}` : ''}`),
 
-  getStockOnHandReport: (companyId) => request(`/reports/stock-on-hand${companyId ? `?companyId=${companyId}` : ''}`),
-  getSalesVsPurchases: (companyId) => request(`/reports/sales-vs-purchases${companyId ? `?companyId=${companyId}` : ''}`),
+  getStockOnHandReport: (companyId, { category, itemId } = {}) => {
+    const params = new URLSearchParams();
+    if (companyId) params.set('companyId', companyId);
+    if (category) params.set('category', category);
+    if (itemId) params.set('itemId', itemId);
+    return request(`/reports/stock-on-hand?${params.toString()}`);
+  },
+  getSalesVsPurchases: (companyId, { from, to } = {}) => {
+    const params = new URLSearchParams();
+    if (companyId) params.set('companyId', companyId);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return request(`/reports/sales-vs-purchases?${params.toString()}`);
+  },
   getMarginByItem: (companyId) => request(`/reports/margin-by-item${companyId ? `?companyId=${companyId}` : ''}`),
+  getTransactionMargins: (companyId, { itemId, from, to, limit } = {}) => {
+    const params = new URLSearchParams();
+    if (companyId) params.set('companyId', companyId);
+    if (itemId) params.set('itemId', itemId);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    if (limit) params.set('limit', limit);
+    return request(`/reports/transaction-margins?${params.toString()}`);
+  },
 
   syncPush: (items, transactions, itemUpdates = []) =>
     request('/sync/push', { method: 'POST', body: { items, transactions, itemUpdates } }),
