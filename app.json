@@ -11,6 +11,14 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.yourcompany.inventoryapp"
-    }
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to scan item barcodes."
+        }
+      ]
+    ]
   }
 }

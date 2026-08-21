@@ -84,7 +84,20 @@ export default function AddItemScreen({ navigation, route }) {
       {isEditMode ? (
         <Text style={styles.readOnlyValue}>{sku}</Text>
       ) : (
-        <TextInput style={styles.input} value={sku} onChangeText={setSku} placeholder="e.g. SKU-1001" />
+        <View style={styles.skuRow}>
+          <TextInput
+            style={[styles.input, styles.skuInput]}
+            value={sku}
+            onChangeText={setSku}
+            placeholder="e.g. SKU-1001"
+          />
+          <TouchableOpacity
+            style={styles.scanButton}
+            onPress={() => navigation.navigate('ScanBarcode', { onScanned: (code) => setSku(code) })}
+          >
+            <Text style={styles.scanButtonText}>Scan</Text>
+          </TouchableOpacity>
+        </View>
       )}
 
       <Text style={styles.label}>Name</Text>
@@ -122,6 +135,10 @@ const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, backgroundColor: '#fff' },
   label: { fontSize: 13, color: '#666', marginBottom: 6, marginTop: 12 },
   input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 12, fontSize: 16 },
+  skuRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  skuInput: { flex: 1 },
+  scanButton: { backgroundColor: '#2f6fed', borderRadius: 8, paddingVertical: 12, paddingHorizontal: 16 },
+  scanButtonText: { color: '#fff', fontWeight: '600' },
   readOnlyValue: { fontSize: 16, color: '#888', paddingVertical: 12 },
   button: { backgroundColor: '#2f6fed', borderRadius: 8, padding: 14, alignItems: 'center', marginTop: 24 },
   buttonText: { color: '#fff', fontWeight: '600', fontSize: 16 },

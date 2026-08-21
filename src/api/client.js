@@ -48,6 +48,7 @@ export const api = {
   getMyCompany: () => request('/companies/mine'),
   createSubCompany: (payload) => request('/companies/sub-companies', { method: 'POST', body: payload }),
   updateSubCompany: (id, payload) => request(`/companies/sub-companies/${id}`, { method: 'PATCH', body: payload }),
+  updateAlertSettings: (payload) => request('/companies/mine', { method: 'PATCH', body: payload }),
   deactivateSubCompany: (id) => request(`/companies/sub-companies/${id}/deactivate`, { method: 'PATCH' }),
   reactivateSubCompany: (id) => request(`/companies/sub-companies/${id}/reactivate`, { method: 'PATCH' }),
 
@@ -90,6 +91,35 @@ export const api = {
     if (limit) params.set('limit', limit);
     return request(`/reports/transaction-margins?${params.toString()}`);
   },
+  getOversightSummary: ({ from, to } = {}) => {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return request(`/reports/oversight-summary?${params.toString()}`);
+  },
+  getDiscrepancies: (companyId, { from, to } = {}) => {
+    const params = new URLSearchParams();
+    if (companyId) params.set('companyId', companyId);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return request(`/reports/discrepancies?${params.toString()}`);
+  },
+  getPriceTrend: (companyId, { itemId, priceType } = {}) => {
+    const params = new URLSearchParams();
+    if (companyId) params.set('companyId', companyId);
+    if (itemId) params.set('itemId', itemId);
+    if (priceType) params.set('priceType', priceType);
+    return request(`/reports/price-trend?${params.toString()}`);
+  },
+  getAlerts: (companyId) => request(`/reports/alerts${companyId ? `?companyId=${companyId}` : ''}`),
+  getReportSnapshots: (companyId, { limit } = {}) => {
+    const params = new URLSearchParams();
+    if (companyId) params.set('companyId', companyId);
+    if (limit) params.set('limit', limit);
+    return request(`/reports/snapshots?${params.toString()}`);
+  },
+  generateReportSnapshot: (companyId) =>
+    request(`/reports/snapshots/generate${companyId ? `?companyId=${companyId}` : ''}`, { method: 'POST' }),
 
   syncPush: (items, transactions, itemUpdates = []) =>
     request('/sync/push', { method: 'POST', body: { items, transactions, itemUpdates } }),

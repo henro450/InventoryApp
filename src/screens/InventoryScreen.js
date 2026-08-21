@@ -2,9 +2,12 @@ import React, { useCallback, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
-import { getLocalItems, getPendingCount, upsertLocalItem, deleteLocalItem } from '../db/localDb';
+import { getLocalItems, getPendingCount, upsertLocalItem, deleteLocalItem, getLastSyncedAt } from '../db/localDb';
 import { runSync } from '../sync/syncEngine';
 import { isLowStock } from '../utils/inventory';
+import { exportCsv, pickAndParseCsv } from '../utils/csvExport';
+import 'react-native-get-random-values';
+import { v4 as uuidv4 } from 'uuid';
 
 // SYNC-06: visible "All synced" / "X pending" indicator so the user always knows whether
 // their data has reached the cloud.
@@ -62,13 +65,94 @@ export default function InventoryScreen({ navigation, route }) {
     );
   }
 
+  function handleScanToFind() {
+    navigation.navigate('ScanBarcode', {
+      onScanned: (code) => {
+        const normalized = code.trim().toLowerCase();
+        const match = items.find((i) => i.sku.trim().toLowerCase() === normalized);
+        if (!match) {
+          Alert.alert('Not found', `No item in this list has SKU "${code}".`);
+          return;
+        }
+        navigation.navigate('StockTransaction', { item: match });
+      },
+    });
+  }
+
+  async function handleExportCatalog() {
+    if (items.length === 0) {
+      Alert.alert('Nothing to export', 'There are no items in this catalog yet.');
+      return;
+    }
+    try {
+      await exportCsv('item-catalog.csv', items, [
+        { key: 'sku', label: 'SKU' },
+        { key: 'name', label: 'Name' },
+        { key: 'category', label: 'Category' },
+        { key: 'unit', label: 'Unit' },
+        { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
+      ]);
+    } catch (err) {
+      Alert.alert('Export failed', err.message);
+    }
+  }
+
+  async function handleImportCatalog() {
+    let rows;
+    try {
+      rows = await pickAndParseCsv();
+    } catch (err) {
+      Alert.alert('Import failed', err.message);
+      return;
+    }
+    if (!rows) return; // user cancelled the picker
+
+    let imported = 0;
+    let skipped = 0;
+    for (const row of rows) {
+      const sku = (row.SKU || row.sku || '').trim();
+      const name = (row.Name || row.name || '').trim();
+      if (!sku || !name) {
+        skipped++;
+        continue;
+      }
+      const clientItemId = uuidv4();
+      upsertLocalItem({
+        id: null,
+        localId: clientItemId,
+        clientItemId,
+        sku,
+        name,
+        category: (row.Category || row.category || '').trim() || null,
+        unit: (row.Unit || row.unit || '').trim() || 'unit',
+        companyId: user.companyId,
+        quantityOnHand: 0,
+        lowStockThreshold: Number(row['Low Stock Threshold'] || row.lowStockThreshold || 0) || 0,
+        lastPurchasePrice: null,
+        updatedAt: new Date().toISOString(),
+        syncStatus: 'pending',
+        userId: user.id,
+      });
+      imported++;
+    }
+
+    runSync(user.id);
+    loadLocal();
+    Alert.alert('Import complete', `Imported ${imported} item${imported === 1 ? '' : 's'}${skipped > 0 ? `, skipped ${skipped} row${skipped === 1 ? '' : 's'} missing SKU/Name` : ''}.`);
+  }
+
   const visibleItems = showLowStockOnly ? items.filter(isLowStock) : items;
+  const lastSynced = getLastSyncedAt();
+  const lastSyncedLabel = lastSynced
+    ? `Data last synced: ${new Date(lastSynced).toLocaleString()}`
+    : 'Not yet synced';
 
   return (
     <View style={styles.container}>
       {!isOwnCompany && (
         <View style={styles.readOnlyBanner}>
           <Text style={styles.readOnlyText}>Viewing {route?.params?.companyName || 'Sub Company'} — read-only</Text>
+          <Text style={styles.lastSyncedText}>{lastSyncedLabel}</Text>
         </View>
       )}
 
@@ -93,6 +177,22 @@ export default function InventoryScreen({ navigation, route }) {
         <TouchableOpacity onPress={() => navigation.navigate('AuditLog', route?.params)}>
           <Text style={styles.linkText}>Audit Log</Text>
         </TouchableOpacity>
+        <TouchableOpacity onPress={() => navigation.navigate('Alerts', route?.params)}>
+          <Text style={styles.linkText}>Alerts</Text>
+        </TouchableOpacity>
+        {isOwnCompany && (
+          <TouchableOpacity onPress={handleScanToFind}>
+            <Text style={styles.linkText}>Scan Item</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity onPress={handleExportCatalog}>
+          <Text style={styles.linkText}>Export Catalog</Text>
+        </TouchableOpacity>
+        {isOwnCompany && (
+          <TouchableOpacity onPress={handleImportCatalog}>
+            <Text style={styles.linkText}>Import Catalog</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <FlatList
@@ -144,6 +244,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   readOnlyBanner: { backgroundColor: '#fff4e0', padding: 8, alignItems: 'center' },
   readOnlyText: { fontSize: 12, color: '#8a5a00', fontWeight: '600' },
+  lastSyncedText: { fontSize: 11, color: '#8a5a00', marginTop: 2 },
   syncBar: {
     padding: 10, backgroundColor: '#f4f6fb', alignItems: 'center',
     flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16,
@@ -154,8 +255,8 @@ const styles = StyleSheet.create({
   filterChipText: { fontSize: 12, color: '#2f6fed', fontWeight: '600' },
   filterChipTextActive: { color: '#fff' },
   linkRow: {
-    flexDirection: 'row', justifyContent: 'center', gap: 24, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
+    flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 16, paddingVertical: 10,
+    paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
   },
   linkText: { color: '#2f6fed', fontWeight: '600', fontSize: 13 },
   empty: { textAlign: 'center', color: '#999', marginTop: 40 },

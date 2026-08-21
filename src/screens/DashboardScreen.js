@@ -3,7 +3,7 @@ import { View, Text, FlatList, StyleSheet, ActivityIndicator, TouchableOpacity }
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
-import { getLocalItems } from '../db/localDb';
+import { getLocalItems, getLastSyncedAt } from '../db/localDb';
 import { isLowStock } from '../utils/inventory';
 
 // RPT-06: Main Company dashboard. If there are no linked Sub Companies, this simply shows
@@ -14,12 +14,17 @@ export default function DashboardScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [lowStockCount, setLowStockCount] = useState(0);
+  const [summary, setSummary] = useState(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const { subCompanies: subs } = await api.getMyCompany();
+        const [{ subCompanies: subs }, summaryResp] = await Promise.all([
+          api.getMyCompany(),
+          api.getOversightSummary(),
+        ]);
         setSubCompanies(subs);
+        setSummary(summaryResp);
       } catch (err) {
         setError(err.message);
       } finally {
@@ -43,9 +48,33 @@ export default function DashboardScreen({ navigation }) {
     );
   }
 
+  const lastSynced = getLastSyncedAt();
+  const lastSyncedLabel = lastSynced
+    ? `Data last synced: ${new Date(lastSynced).toLocaleString()}`
+    : 'Not yet synced';
+
   return (
     <View style={styles.container}>
       <Text style={styles.heading}>Company Overview</Text>
+
+      {summary && (
+        <View style={styles.summaryCard}>
+          <SummaryRow label="Total items" value={String(summary.totals.itemCount)} />
+          <SummaryRow
+            label="Low stock"
+            value={String(summary.totals.lowStockCount)}
+            valueStyle={summary.totals.lowStockCount > 0 && styles.negative}
+          />
+          <SummaryRow label="Total sales revenue" value={formatMoney(summary.totals.totalSalesRevenue)} />
+          <SummaryRow label="Total purchase cost" value={formatMoney(summary.totals.totalPurchaseCost)} />
+          <SummaryRow
+            label="Total margin"
+            value={formatMoney(summary.totals.margin)}
+            valueStyle={summary.totals.margin >= 0 ? styles.positive : styles.negative}
+          />
+          <Text style={styles.syncText}>{lastSyncedLabel}</Text>
+        </View>
+      )}
 
       <View style={styles.ownLinksRow}>
         <TouchableOpacity style={styles.ownLink} onPress={() => navigation.navigate('Inventory')}>
@@ -64,6 +93,9 @@ export default function DashboardScreen({ navigation }) {
         </TouchableOpacity>
         <TouchableOpacity style={styles.ownLink} onPress={() => navigation.navigate('ManageSubCompanies')}>
           <Text style={styles.ownLinkText}>Manage Sub Companies</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.ownLink} onPress={() => navigation.navigate('CompareSubCompanies')}>
+          <Text style={styles.ownLinkText}>Compare Companies</Text>
         </TouchableOpacity>
       </View>
 
@@ -106,6 +138,19 @@ export default function DashboardScreen({ navigation }) {
   );
 }
 
+function SummaryRow({ label, value, valueStyle }) {
+  return (
+    <View style={styles.summaryRow}>
+      <Text style={styles.summaryRowLabel}>{label}</Text>
+      <Text style={[styles.summaryRowValue, valueStyle]}>{value}</Text>
+    </View>
+  );
+}
+
+function formatMoney(n) {
+  return `$${Number(n || 0).toFixed(2)}`;
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, backgroundColor: '#fff' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -121,6 +166,13 @@ const styles = StyleSheet.create({
     minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4,
   },
   badgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  summaryCard: { backgroundColor: '#f4f6fb', borderRadius: 10, padding: 14, marginBottom: 16 },
+  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
+  summaryRowLabel: { color: '#666', fontSize: 13 },
+  summaryRowValue: { fontWeight: '600', fontSize: 13 },
+  positive: { color: '#2e9c4c' },
+  negative: { color: '#d9534f' },
+  syncText: { fontSize: 11, color: '#999', marginTop: 8 },
   error: { color: '#d9534f', marginBottom: 12 },
   emptyBox: { padding: 16, backgroundColor: '#f4f6fb', borderRadius: 10 },
   emptyTitle: { fontWeight: '600', marginBottom: 6 },

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, FlatList, StyleSheet, ActivityIndicator, TouchableOpacity, TextInput } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
+import { getLastSyncedAt } from '../db/localDb';
 
 const ACTIONS = ['create', 'update', 'delete'];
 
@@ -13,6 +14,11 @@ const ACTIONS = ['create', 'update', 'delete'];
 export default function AuditLogScreen({ route }) {
   const { user } = useAuth();
   const companyId = route?.params?.companyId || user.companyId;
+  const companyLabel = route?.params?.companyName;
+  const lastSynced = getLastSyncedAt();
+  const lastSyncedLabel = lastSynced
+    ? `Data last synced: ${new Date(lastSynced).toLocaleString()}`
+    : 'Not yet synced';
 
   const [baseLogs, setBaseLogs] = useState([]);
   const [displayLogs, setDisplayLogs] = useState([]);
@@ -102,6 +108,10 @@ export default function AuditLogScreen({ route }) {
 
   return (
     <View style={styles.container}>
+      {companyLabel && (
+        <Text style={styles.syncLabel}>{companyLabel} — {lastSyncedLabel}</Text>
+      )}
+
       {error && (
         <Text style={styles.error}>Audit log requires connectivity to load — {error}</Text>
       )}
@@ -186,6 +196,7 @@ const styles = StyleSheet.create({
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   error: { color: '#d9534f', padding: 16, fontSize: 13 },
   refreshButton: { alignSelf: 'flex-end', marginRight: 16, marginTop: 8 },
+  syncLabel: { fontSize: 11, color: '#999', margin: 16, marginBottom: 0 },
   refreshText: { color: '#2f6fed', fontWeight: '600' },
   filterCard: { backgroundColor: '#f4f6fb', borderRadius: 10, padding: 12, margin: 16, marginBottom: 0 },
   filterLabel: { fontSize: 12, color: '#666', marginBottom: 6, marginTop: 8 },

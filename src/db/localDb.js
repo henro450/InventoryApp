@@ -250,6 +250,18 @@ export function getPendingCount(userId) {
   return (txRow ? txRow.count : 0) + (itemRow ? itemRow.count : 0);
 }
 
+// NFR-06: local data retention/cleanup for already-synced records. Only 'synced' rows are
+// ever eligible — 'pending'/'failed' rows are never touched regardless of age, since their
+// data isn't safely persisted server-side yet. Items (the catalog) are never purged, only
+// historical stock_transactions rows, whose cumulative effect is already baked into the
+// item's current quantityOnHand and is safely queryable server-side via reports if needed.
+// Called automatically after every successful sync (see syncEngine.js) — cheap no-op when
+// there's nothing old enough to remove.
+export function purgeOldSyncedTransactions(retentionDays = 90) {
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  db.runSync("DELETE FROM stock_transactions WHERE syncStatus = 'synced' AND occurredAt < ?", [cutoff]);
+}
+
 // AUTH-04: wipes all local offline data on a confirmed logout. Only called when the user
 // has explicitly confirmed (or had nothing pending to lose) — a forced/session-expiry
 // logout never calls this, so an unclean exit's pending backlog survives to resume syncing

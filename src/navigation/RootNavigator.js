@@ -11,6 +11,9 @@ import DashboardScreen from '../screens/DashboardScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 import AuditLogScreen from '../screens/AuditLogScreen';
 import ManageSubCompaniesScreen from '../screens/ManageSubCompaniesScreen';
+import CompareSubCompaniesScreen from '../screens/CompareSubCompaniesScreen';
+import ScanBarcodeScreen from '../screens/ScanBarcodeScreen';
+import AlertsScreen from '../screens/AlertsScreen';
 import { initLocalDb } from '../db/localDb';
 import { startConnectivityWatcher } from '../sync/syncEngine';
 
@@ -74,6 +77,13 @@ export default function RootNavigator() {
               component={ManageSubCompaniesScreen}
               options={{ title: 'Sub Companies' }}
             />
+            <Stack.Screen
+              name="CompareSubCompanies"
+              component={CompareSubCompaniesScreen}
+              options={{ title: 'Compare Companies' }}
+            />
+            <Stack.Screen name="ScanBarcode" component={ScanBarcodeScreen} options={{ title: 'Scan' }} />
+            <Stack.Screen name="Alerts" component={AlertsScreen} options={{ title: 'Alerts' }} />
           </>
         ) : (
           <>
@@ -90,6 +100,8 @@ export default function RootNavigator() {
             />
             <Stack.Screen name="Reports" component={ReportsScreen} options={{ title: 'Reports' }} />
             <Stack.Screen name="AuditLog" component={AuditLogScreen} options={{ title: 'Audit Log' }} />
+            <Stack.Screen name="ScanBarcode" component={ScanBarcodeScreen} options={{ title: 'Scan' }} />
+            <Stack.Screen name="Alerts" component={AlertsScreen} options={{ title: 'Alerts' }} />
           </>
         )}
       </Stack.Navigator>

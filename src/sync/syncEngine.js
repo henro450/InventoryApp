@@ -12,17 +12,32 @@ import {
   setLastSyncedAt,
   upsertLocalItem,
   getLocalItemSyncStatus,
+  getServerIdForLocalItem,
+  purgeOldSyncedTransactions,
 } from '../db/localDb';
 
 let syncInProgress = false;
 
+// NFR-07: a huge pending queue is pushed in fixed-size chunks rather than one giant request,
+// so a large offline backlog can't produce a single oversized/slow/failure-prone payload.
+const BATCH_SIZE = 50;
+
+function chunk(array, size) {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+}
+
 // SYNC-03/SYNC-05: triggered by two things — a NetInfo listener that fires immediately on an
 // offline->online transition (see startConnectivityWatcher), and a periodic timer as a
 // fallback in case a transition is missed (e.g. state changed while the app was backgrounded).
-// Pushes pending items, then pending transactions (in that order, since a transaction for an
-// offline-created item needs that item's server id first), then pulls down anything new from
-// the server. Safe to call repeatedly — records already synced are skipped by the server's
-// dedupe checks on clientItemId / clientTransactionId.
+// Pushes pending item creates, then edits, then transactions (in that order — a transaction
+// needs its item's server id first, and batching item creates/edits to completion before
+// building the transaction payload guarantees that id is available even across batches — see
+// the itemId resolution comment below). Pulls down anything new afterward. Safe to call
+// repeatedly — records already synced are skipped by the server's dedupe checks.
 export async function runSync(userId) {
   if (syncInProgress) return { skipped: true };
   syncInProgress = true;
@@ -33,7 +48,6 @@ export async function runSync(userId) {
       return { offline: true };
     }
 
-    // --- Push pending items first (INV-01/INV-06: items created offline) ---
     // AUTH-04: scoped to the current session's own backlog only — a device that's seen
     // other users never cross-pushes their leftover pending rows.
     const pendingItems = getPendingItems(userId);
@@ -45,8 +59,9 @@ export async function runSync(userId) {
     const pendingCreates = pendingItems.filter((i) => !i.id);
     const pendingEdits = pendingItems.filter((i) => i.id);
 
-    if (pendingItems.length > 0 || pendingTransactions.length > 0) {
-      const itemsPayload = pendingCreates.map((i) => ({
+    // --- Item creates, batched, pushed to completion before anything else ---
+    for (const batch of chunk(pendingCreates, BATCH_SIZE)) {
+      const itemsPayload = batch.map((i) => ({
         clientItemId: i.clientItemId,
         sku: i.sku,
         name: i.name,
@@ -54,8 +69,21 @@ export async function runSync(userId) {
         unit: i.unit,
         lowStockThreshold: i.lowStockThreshold,
       }));
+      const { itemResults } = await api.syncPush(itemsPayload, [], []);
+      for (const r of itemResults) {
+        const match = batch.find((i) => i.clientItemId === r.clientItemId);
+        if (!match) continue;
+        if (r.status === 'synced' || r.status === 'deduped') {
+          markItemSynced(match.localId, r.serverId);
+        } else {
+          markItemFailed(match.localId);
+        }
+      }
+    }
 
-      const itemUpdatesPayload = pendingEdits.map((i) => ({
+    // --- Item edits/deactivations, batched ---
+    for (const batch of chunk(pendingEdits, BATCH_SIZE)) {
+      const itemUpdatesPayload = batch.map((i) => ({
         id: i.id,
         name: i.name,
         category: i.category,
@@ -63,36 +91,9 @@ export async function runSync(userId) {
         lowStockThreshold: i.lowStockThreshold,
         isActive: !!i.isActive,
       }));
-
-      const transactionsPayload = pendingTransactions.map((t) => ({
-        clientTransactionId: t.clientTransactionId,
-        itemId: t.itemServerId || undefined, // already-synced item
-        clientItemId: t.itemServerId ? undefined : t.itemClientItemId, // newly-created item in this same batch
-        type: t.type,
-        quantity: t.quantity,
-        unitPrice: t.unitPrice,
-        occurredAt: t.occurredAt,
-      }));
-
-      const { itemResults, results, itemUpdateResults } = await api.syncPush(
-        itemsPayload,
-        transactionsPayload,
-        itemUpdatesPayload
-      );
-
-      for (const r of itemResults) {
-        if (r.status === 'synced' || r.status === 'deduped') {
-          markItemSynced(
-            pendingCreates.find((i) => i.clientItemId === r.clientItemId)?.localId,
-            r.serverId
-          );
-        } else {
-          markItemFailed(pendingCreates.find((i) => i.clientItemId === r.clientItemId)?.localId);
-        }
-      }
-
+      const { itemUpdateResults } = await api.syncPush([], [], itemUpdatesPayload);
       for (const r of itemUpdateResults) {
-        const match = pendingEdits.find((i) => i.id === r.id);
+        const match = batch.find((i) => i.id === r.id);
         if (!match) continue;
         if (r.status === 'synced') {
           markItemSynced(match.localId, r.id); // id is unchanged, pass it straight through
@@ -100,7 +101,30 @@ export async function runSync(userId) {
           markItemFailed(match.localId);
         }
       }
+    }
 
+    // --- Transactions, batched. Resolved against the CURRENT item table state (not the
+    // transaction row's possibly-stale stored itemServerId) — necessary now that item creates
+    // are pushed in separate requests from transactions: an item created in this same
+    // runSync() call has already synced by this point (batched to completion above), so a
+    // live lookup by itemLocalId picks up its real id even though the transaction row's own
+    // itemServerId column was never updated. Falls back to clientItemId only when the item
+    // genuinely hasn't synced yet (e.g. it failed), matching the server's existing
+    // same-request resolution for that case. ---
+    for (const batch of chunk(pendingTransactions, BATCH_SIZE)) {
+      const transactionsPayload = batch.map((t) => {
+        const resolvedItemId = t.itemServerId || getServerIdForLocalItem(t.itemLocalId);
+        return {
+          clientTransactionId: t.clientTransactionId,
+          itemId: resolvedItemId || undefined,
+          clientItemId: resolvedItemId ? undefined : t.itemClientItemId,
+          type: t.type,
+          quantity: t.quantity,
+          unitPrice: t.unitPrice,
+          occurredAt: t.occurredAt,
+        };
+      });
+      const { results } = await api.syncPush([], transactionsPayload, []);
       for (const r of results) {
         if (r.status === 'synced' || r.status === 'deduped') {
           markTransactionSynced(r.clientTransactionId, r.serverId);
@@ -143,6 +167,7 @@ export async function runSync(userId) {
     }
 
     setLastSyncedAt(pulled.syncedAt); // SYNC-07: labels how current the cached data is
+    purgeOldSyncedTransactions(); // NFR-06: prune old synced history now that sync succeeded
 
     return {
       success: true,
