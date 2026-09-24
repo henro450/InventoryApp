@@ -6,7 +6,11 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "android": {
-      "package": "com.yourcompany.inventoryapp"
+      "package": "com.yourcompany.inventoryapp",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "ios": {
       "supportsTablet": true,
@@ -19,6 +23,11 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to scan item barcodes."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "3cd57cab-96e7-4556-b231-00f0d9bca2fb"
+      }
+    }
   }
 }
