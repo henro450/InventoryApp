@@ -1,8 +1,10 @@
 import * as SecureStore from 'expo-secure-store';
 
-// Point this at your machine's LAN IP when testing on a physical device (localhost won't
-// resolve to your computer from a phone). e.g. 'http://192.168.1.50:4000/api'
-export const API_BASE_URL = 'http://localhost:4000/api';
+// Production defaults to Render. EXPO_PUBLIC_API_URL can override this at bundle time for
+// local development, e.g. http://192.168.1.50:4000/api on a physical device.
+export const API_BASE_URL = (
+  process.env.EXPO_PUBLIC_API_URL || 'https://inventryapi.onrender.com/api'
+).replace(/\/+$/, '');
 
 async function getToken() {
   return SecureStore.getItemAsync('authToken');
