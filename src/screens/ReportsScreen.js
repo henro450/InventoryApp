@@ -1,25 +1,34 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, TextInput, Alert } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, Pressable, RefreshControl } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
 import { getLastSyncedAt } from '../db/localDb';
 import { exportCsv } from '../utils/csvExport';
+import { formatDate, formatDateTime, formatMoney, formatNumber, lastSyncedLabel } from '../utils/format';
+import Icon from '../components/Icon';
+import PriceTrendChart from '../components/PriceTrendChart';
+import {
+  Text, Screen, LargeHeader, NavHeader, IconButton, AccountButton, Card, SectionTitle, Chip, Field, Button, Banner,
+  KV, BarRow, Divider, InlineEmpty, Loading, CompanySwitcher, ReadOnlyBanner,
+} from '../components/ui';
+import { colors, fonts, type } from '../theme';
+
+const PREVIEW_ROWS = 5;
 
 // RPT-01, RPT-02, RPT-03, RPT-04, PRC-04: stock on hand (item/category filter), sales vs
 // purchases (date range filter), margin by item/category/Sub Company, per-transaction margin
 // (historical PriceHistory cost basis), discrepancy report (expected vs counted stock), and
 // price trend for a selected item. RPT-05 export is CSV only — no PDF/Excel, which would need
 // new heavyweight dependencies this project has otherwise avoided throughout.
-export default function ReportsScreen({ route }) {
-  const { user, isMainCompany } = useAuth();
+export default function ReportsScreen({ route, navigation }) {
+  const { user, isMainCompany, logout } = useAuth();
   const companyId = route?.params?.companyId || user.companyId;
   const companyLabel = route?.params?.companyName;
-  const lastSynced = getLastSyncedAt();
-  const lastSyncedLabel = lastSynced
-    ? `Data last synced: ${new Date(lastSynced).toLocaleString()}`
-    : 'Not yet synced';
+  const isOwnCompany = companyId === user.companyId;
+  const lastSynced = getLastSyncedAt(user.id);
 
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [stockOnHand, setStockOnHand] = useState([]);
   const [salesVsPurchases, setSalesVsPurchases] = useState(null);
@@ -32,16 +41,17 @@ export default function ReportsScreen({ route }) {
   const [generatingSnapshot, setGeneratingSnapshot] = useState(false);
 
   const [items, setItems] = useState([]);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [categoryInput, setCategoryInput] = useState('');
   const [itemSearchText, setItemSearchText] = useState('');
   const [selectedItem, setSelectedItem] = useState(null);
   const [fromInput, setFromInput] = useState('');
   const [toInput, setToInput] = useState('');
   const [dateError, setDateError] = useState(null);
-  const [appliedFilters, setAppliedFilters] = useState({ category: '', itemId: null, from: '', to: '' });
+  const [appliedFilters, setAppliedFilters] = useState({ category: '', itemId: null, itemName: '', from: '', to: '' });
+  const [expanded, setExpanded] = useState({});
 
   async function load(filters = appliedFilters) {
-    setLoading(true);
     setError(null);
     try {
       const calls = [
@@ -76,6 +86,18 @@ export default function ReportsScreen({ route }) {
     load();
   }, [companyId]);
 
+  async function handleRefresh() {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }
+
+  function applyFilters(next) {
+    setAppliedFilters(next);
+    setExpanded({});
+    load(next);
+  }
+
   function handleApplyFilters() {
     if (fromInput && isNaN(Date.parse(fromInput))) {
       setDateError('Invalid "from" date — use YYYY-MM-DD');
@@ -86,14 +108,33 @@ export default function ReportsScreen({ route }) {
       return;
     }
     setDateError(null);
-    const next = {
+    setFiltersOpen(false);
+    applyFilters({
       category: categoryInput.trim(),
       itemId: selectedItem?.id || null,
+      itemName: selectedItem?.name || '',
       from: fromInput.trim(),
       to: toInput.trim(),
-    };
-    setAppliedFilters(next);
-    load(next);
+    });
+  }
+
+  function clearFilter(key) {
+    const next = { ...appliedFilters };
+    if (key === 'category') {
+      next.category = '';
+      setCategoryInput('');
+    } else if (key === 'item') {
+      next.itemId = null;
+      next.itemName = '';
+      setSelectedItem(null);
+      setItemSearchText('');
+    } else {
+      next.from = '';
+      next.to = '';
+      setFromInput('');
+      setToInput('');
+    }
+    applyFilters(next);
   }
 
   function handleClearSelectedItem() {
@@ -145,437 +186,473 @@ export default function ReportsScreen({ route }) {
       acc[key].estimatedMargin += row.estimatedMargin;
       return acc;
     }, {})
+  ).sort((a, b) => b.estimatedMargin - a.estimatedMargin);
+
+  const limited = (key, rows) => (expanded[key] ? rows : rows.slice(0, PREVIEW_ROWS));
+  const showAll = (key, rows, noun) =>
+    rows.length > PREVIEW_ROWS ? (
+      <Pressable accessibilityRole="button" onPress={() => setExpanded((e) => ({ ...e, [key]: !e[key] }))} style={styles.showAll}>
+        <Text style={styles.link}>{expanded[key] ? 'Show less' : `Show all ${formatNumber(rows.length)} ${noun}`}</Text>
+      </Pressable>
+    ) : null;
+
+  const exportButton = (label, onPress) => (
+    <Pressable accessibilityRole="button" accessibilityLabel={`Export ${label} as CSV`} onPress={onPress} style={styles.csv}>
+      <Icon name="download" size={16} color={colors.ink2} strokeWidth={2} />
+      <Text style={styles.csvText}>CSV</Text>
+    </Pressable>
+  );
+
+  const header = isOwnCompany ? (
+    <LargeHeader
+      eyebrow={isMainCompany ? 'Main company' : 'Sub company'}
+      title="Reports"
+      right={
+        isMainCompany ? (
+          <IconButton icon="bell" label="Alerts" onPress={() => navigation.navigate('Alerts')} />
+        ) : (
+          <AccountButton user={user} onLogout={logout} />
+        )
+      }
+    />
+  ) : (
+    <>
+      <NavHeader title={companyLabel || 'Sub Company'} />
+      <View style={styles.readOnlyWrap}>
+        <ReadOnlyBanner subtitle={lastSyncedLabel(lastSynced)} />
+        <CompanySwitcher active="reports" params={{ companyId, companyName: companyLabel }} />
+      </View>
+    </>
   );
 
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator />
-      </View>
+      <Screen>
+        {header}
+        <Loading />
+      </Screen>
     );
   }
 
+  const svp = salesVsPurchases;
+  const svpMax = svp ? Math.max(svp.totalSalesRevenue, svp.totalPurchaseCost, 1) : 1;
+  const companyMax = marginByCompany ? Math.max(0, ...marginByCompany.map((c) => c.margin)) : 0;
+  const dateLabel =
+    appliedFilters.from || appliedFilters.to ? `${appliedFilters.from || 'Start'} – ${appliedFilters.to || 'Today'}` : null;
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
-      {companyLabel && <Text style={styles.companyLabel}>{companyLabel}</Text>}
-      {companyLabel && <Text style={styles.syncLabel}>{lastSyncedLabel}</Text>}
-
-      {error && (
-        <Text style={styles.error}>
-          Reports require an internet connection to reach the latest data — {error}
-        </Text>
-      )}
-
-      <TouchableOpacity onPress={() => load()} style={styles.refreshButton}>
-        <Text style={styles.refreshText}>Refresh</Text>
-      </TouchableOpacity>
-
-      <Text style={styles.sectionTitle}>Filters</Text>
-      <View style={styles.card}>
-        <Text style={styles.filterLabel}>Category</Text>
-        <TextInput
-          style={styles.input}
-          value={categoryInput}
-          onChangeText={setCategoryInput}
-          placeholder="e.g. Hardware"
-        />
-
-        <Text style={styles.filterLabel}>Item</Text>
-        {selectedItem ? (
-          <View style={styles.filterChip}>
-            <Text style={styles.filterChipText}>{selectedItem.name}</Text>
-            <TouchableOpacity onPress={handleClearSelectedItem}>
-              <Text style={styles.filterChipClear}>×</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <>
-            <TextInput
-              style={styles.input}
-              value={itemSearchText}
-              onChangeText={setItemSearchText}
-              placeholder="Search by name or SKU"
-            />
-            {itemMatches.length > 0 &&
-              itemMatches.slice(0, 5).map((i) => (
-                <TouchableOpacity
-                  key={i.id}
-                  style={styles.itemMatchRow}
-                  onPress={() => {
-                    setSelectedItem(i);
-                    setItemSearchText('');
-                  }}
-                >
-                  <Text style={styles.itemMatchText}>{i.name} · {i.sku}</Text>
-                </TouchableOpacity>
-              ))}
-          </>
-        )}
-
-        <Text style={styles.filterLabel}>From (YYYY-MM-DD)</Text>
-        <TextInput style={styles.input} value={fromInput} onChangeText={setFromInput} placeholder="Optional" />
-
-        <Text style={styles.filterLabel}>To (YYYY-MM-DD)</Text>
-        <TextInput style={styles.input} value={toInput} onChangeText={setToInput} placeholder="Optional" />
-
-        {dateError && <Text style={styles.error}>{dateError}</Text>}
-
-        <TouchableOpacity style={styles.applyButton} onPress={handleApplyFilters}>
-          <Text style={styles.applyButtonText}>Apply Filters</Text>
-        </TouchableOpacity>
-      </View>
-
-      <Text style={styles.sectionTitle}>Sales vs. Purchases</Text>
-      {salesVsPurchases ? (
-        <View style={styles.card}>
-          <Row label="Total purchase cost" value={formatMoney(salesVsPurchases.totalPurchaseCost)} />
-          <Row label="Total sales revenue" value={formatMoney(salesVsPurchases.totalSalesRevenue)} />
-          <Row
-            label="Margin"
-            value={formatMoney(salesVsPurchases.margin)}
-            valueStyle={salesVsPurchases.margin >= 0 ? styles.positive : styles.negative}
+    <Screen>
+      {header}
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
+      >
+        {error && (
+          <Banner
+            kind="error"
+            title="Couldn't reach the latest data"
+            subtitle={`Reports need an internet connection. ${error}`}
+            actionLabel="Retry"
+            onAction={handleRefresh}
           />
-          <Row label="Purchases recorded" value={String(salesVsPurchases.purchaseCount)} />
-          <Row label="Sales recorded" value={String(salesVsPurchases.saleCount)} />
-        </View>
-      ) : (
-        <Text style={styles.empty}>No data available.</Text>
-      )}
-
-      <SectionHeader
-        title="Stock on Hand"
-        onExport={() =>
-          handleExport(
-            'stock-on-hand.csv',
-            stockOnHand,
-            [
-              { key: 'sku', label: 'SKU' },
-              { key: 'name', label: 'Name' },
-              { key: 'category', label: 'Category' },
-              { key: 'quantityOnHand', label: 'Quantity On Hand' },
-              { key: 'unit', label: 'Unit' },
-              { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
-            ]
-          )
-        }
-      />
-      {stockOnHand.length === 0 ? (
-        <Text style={styles.empty}>No items yet.</Text>
-      ) : (
-        stockOnHand.map((item) => (
-          <View key={item.id} style={styles.itemRow}>
-            <Text style={styles.itemName}>{item.name}</Text>
-            <Text
-              style={[styles.itemQty, item.quantityOnHand <= item.lowStockThreshold && styles.negative]}
-            >
-              {item.quantityOnHand} {item.unit}
-            </Text>
-          </View>
-        ))
-      )}
-
-      <SectionHeader
-        title="Margin by Item"
-        onExport={() =>
-          handleExport(
-            'margin-by-item.csv',
-            marginByItem,
-            [
-              { key: 'name', label: 'Item' },
-              { key: 'category', label: 'Category' },
-              { key: 'totalUnitsSold', label: 'Units Sold' },
-              { key: 'totalRevenue', label: 'Revenue' },
-              { key: 'estimatedCost', label: 'Estimated Cost' },
-              { key: 'estimatedMargin', label: 'Estimated Margin' },
-            ]
-          )
-        }
-      />
-      {marginByItem.length === 0 ? (
-        <Text style={styles.empty}>No sales recorded yet.</Text>
-      ) : (
-        marginByItem.map((row) => (
-          <View key={row.itemId} style={styles.marginCard}>
-            <Text style={styles.itemName}>{row.name}</Text>
-            <Row label="Category" value={row.category || 'Uncategorized'} />
-            <Row label="Units sold" value={String(row.totalUnitsSold)} />
-            <Row label="Revenue" value={formatMoney(row.totalRevenue)} />
-            <Row label="Est. cost" value={formatMoney(row.estimatedCost)} />
-            <Row
-              label="Est. margin"
-              value={formatMoney(row.estimatedMargin)}
-              valueStyle={row.estimatedMargin >= 0 ? styles.positive : styles.negative}
-            />
-          </View>
-        ))
-      )}
-
-      <SectionHeader
-        title="Margin by Category"
-        onExport={() =>
-          handleExport(
-            'margin-by-category.csv',
-            marginByCategory,
-            [
-              { key: 'category', label: 'Category' },
-              { key: 'totalRevenue', label: 'Revenue' },
-              { key: 'estimatedCost', label: 'Estimated Cost' },
-              { key: 'estimatedMargin', label: 'Estimated Margin' },
-            ]
-          )
-        }
-      />
-      {marginByCategory.length === 0 ? (
-        <Text style={styles.empty}>No sales recorded yet.</Text>
-      ) : (
-        marginByCategory.map((row) => (
-          <View key={row.category} style={styles.marginCard}>
-            <Text style={styles.itemName}>{row.category}</Text>
-            <Row label="Revenue" value={formatMoney(row.totalRevenue)} />
-            <Row label="Est. cost" value={formatMoney(row.estimatedCost)} />
-            <Row
-              label="Est. margin"
-              value={formatMoney(row.estimatedMargin)}
-              valueStyle={row.estimatedMargin >= 0 ? styles.positive : styles.negative}
-            />
-          </View>
-        ))
-      )}
-
-      {isMainCompany && (
-        <>
-          <Text style={styles.sectionTitle}>Margin by Sub Company</Text>
-          {!marginByCompany ? (
-            <Text style={styles.empty}>Could not load company breakdown.</Text>
-          ) : (
-            marginByCompany.map((row) => (
-              <View key={row.companyId} style={styles.marginCard}>
-                <Text style={styles.itemName}>{row.isMain ? `(Main) ${row.companyName}` : row.companyName}</Text>
-                <Row label="Revenue" value={formatMoney(row.totalSalesRevenue)} />
-                <Row label="Purchase cost" value={formatMoney(row.totalPurchaseCost)} />
-                <Row
-                  label="Margin"
-                  value={formatMoney(row.margin)}
-                  valueStyle={row.margin >= 0 ? styles.positive : styles.negative}
-                />
-              </View>
-            ))
-          )}
-        </>
-      )}
-
-      <SectionHeader
-        title="Per-Transaction Margin (Recent Sales)"
-        onExport={() =>
-          handleExport(
-            'transaction-margins.csv',
-            transactionMargins,
-            [
-              { key: 'itemName', label: 'Item' },
-              { key: 'sku', label: 'SKU' },
-              { key: 'occurredAt', label: 'Date' },
-              { key: 'quantity', label: 'Quantity' },
-              { key: 'unitPrice', label: 'Sale Price' },
-              { key: 'estimatedCost', label: 'Estimated Cost' },
-              { key: 'estimatedMargin', label: 'Estimated Margin' },
-            ]
-          )
-        }
-      />
-      <Text style={styles.empty}>Showing up to the 50 most recent matching sales.</Text>
-      {transactionMargins.length === 0 ? (
-        <Text style={styles.empty}>No sales recorded yet.</Text>
-      ) : (
-        transactionMargins.map((tx) => (
-          <View key={tx.transactionId} style={styles.marginCard}>
-            <Text style={styles.itemName}>{tx.itemName || 'Unknown item'}</Text>
-            <Row label="Date" value={new Date(tx.occurredAt).toLocaleDateString()} />
-            <Row label="Quantity" value={String(tx.quantity)} />
-            <Row label="Sale price" value={formatMoney(tx.unitPrice)} />
-            <Row
-              label="Cost"
-              value={tx.costAvailable ? formatMoney(tx.estimatedCost) : 'Cost data unavailable'}
-              valueStyle={!tx.costAvailable && styles.muted}
-            />
-            <Row
-              label="Margin"
-              value={tx.costAvailable ? formatMoney(tx.estimatedMargin) : '—'}
-              valueStyle={
-                tx.costAvailable ? (tx.estimatedMargin >= 0 ? styles.positive : styles.negative) : styles.muted
-              }
-            />
-          </View>
-        ))
-      )}
-
-      <SectionHeader
-        title="Discrepancy Report"
-        onExport={() =>
-          handleExport(
-            'discrepancies.csv',
-            discrepancies,
-            [
-              { key: 'itemName', label: 'Item' },
-              { key: 'sku', label: 'SKU' },
-              { key: 'occurredAt', label: 'Date' },
-              { key: 'expected', label: 'Expected (System)' },
-              { key: 'counted', label: 'Counted (Physical)' },
-              { key: 'discrepancy', label: 'Discrepancy' },
-            ]
-          )
-        }
-      />
-      <Text style={styles.empty}>Expected (system) vs. counted (physical) stock for every manual adjustment.</Text>
-      {discrepancies.length === 0 ? (
-        <Text style={styles.empty}>No stock adjustments recorded yet.</Text>
-      ) : (
-        discrepancies.map((d) => (
-          <View key={d.transactionId} style={styles.marginCard}>
-            <Text style={styles.itemName}>{d.itemName || 'Unknown item'}</Text>
-            <Row label="Date" value={new Date(d.occurredAt).toLocaleDateString()} />
-            <Row label="Expected" value={d.discrepancyKnown ? String(d.expected) : 'Unknown'} />
-            <Row label="Counted" value={String(d.counted)} />
-            <Row
-              label="Discrepancy"
-              value={d.discrepancyKnown ? String(d.discrepancy) : '—'}
-              valueStyle={
-                !d.discrepancyKnown ? styles.muted : d.discrepancy === 0 ? null : d.discrepancy > 0 ? styles.positive : styles.negative
-              }
-            />
-          </View>
-        ))
-      )}
-
-      <SectionHeader
-        title="Price Trend"
-        onExport={() =>
-          handleExport(
-            `price-trend-${selectedItem ? selectedItem.sku : 'item'}.csv`,
-            priceTrend,
-            [
-              { key: 'effectiveDate', label: 'Date' },
-              { key: 'priceType', label: 'Type' },
-              { key: 'amount', label: 'Amount' },
-            ]
-          )
-        }
-      />
-      {!selectedItem ? (
-        <Text style={styles.empty}>Select an item above (in Filters) to view its price trend.</Text>
-      ) : priceTrend.length === 0 ? (
-        <Text style={styles.empty}>No price history recorded yet for {selectedItem.name}.</Text>
-      ) : (
-        priceTrend.map((h) => (
-          <View key={h.id} style={styles.itemRow}>
-            <Text style={styles.itemName}>
-              {new Date(h.effectiveDate).toLocaleDateString()} · {h.priceType}
-            </Text>
-            <Text style={styles.itemQty}>{formatMoney(h.amount)}</Text>
-          </View>
-        ))
-      )}
-
-      <Text style={styles.sectionTitle}>Scheduled Reports</Text>
-      <Text style={styles.empty}>
-        A summary is generated automatically once a day. "Delivery" is in-app only — no
-        email/push service is configured, so a fresh snapshot appears here next time you open
-        the app rather than being sent to you.
-      </Text>
-      <TouchableOpacity style={styles.applyButton} onPress={handleGenerateSnapshot} disabled={generatingSnapshot}>
-        {generatingSnapshot ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.applyButtonText}>Generate Now</Text>
         )}
-      </TouchableOpacity>
-      {snapshots.length === 0 ? (
-        <Text style={styles.empty}>No automatic reports generated yet.</Text>
-      ) : (
-        snapshots.map((s) => (
-          <View key={s.id} style={styles.marginCard}>
-            <Text style={styles.itemName}>{new Date(s.generatedAt).toLocaleString()}</Text>
-            <Row label="Items" value={String(s.itemCount)} />
-            <Row label="Low stock" value={String(s.lowStockCount)} />
-            <Row label="Sales revenue" value={formatMoney(s.totalSalesRevenue)} />
-            <Row label="Purchase cost" value={formatMoney(s.totalPurchaseCost)} />
-            <Row
-              label="Margin"
-              value={formatMoney(s.margin)}
-              valueStyle={s.margin >= 0 ? styles.positive : styles.negative}
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterChips} style={styles.filterScroll}>
+          <Chip label="Filters" icon={filtersOpen ? 'chevup' : 'filter'} active={filtersOpen} onPress={() => setFiltersOpen((o) => !o)} />
+          {dateLabel && <Chip label={dateLabel} icon="calendar" onClear={() => clearFilter('date')} />}
+          {appliedFilters.category ? <Chip label={appliedFilters.category} onClear={() => clearFilter('category')} /> : null}
+          {appliedFilters.itemName ? <Chip label={appliedFilters.itemName} onClear={() => clearFilter('item')} /> : null}
+          {!dateLabel && !appliedFilters.category && !appliedFilters.itemName && <Chip label="All time · all items" />}
+        </ScrollView>
+
+        {filtersOpen && (
+          <Card padding={16} gap={14}>
+            <Field label="Category" value={categoryInput} onChangeText={setCategoryInput} placeholder="e.g. Hardware" />
+            <View style={{ gap: 8 }}>
+              <Text style={type.label}>Item</Text>
+              {selectedItem ? (
+                <View style={{ flexDirection: 'row' }}>
+                  <Chip label={selectedItem.name} active onClear={handleClearSelectedItem} />
+                </View>
+              ) : (
+                <>
+                  <Field value={itemSearchText} onChangeText={setItemSearchText} placeholder="Search by name or SKU" leadingIcon="search" accessibilityLabel="Item" />
+                  {itemMatches.slice(0, 5).map((i) => (
+                    <Pressable
+                      key={i.id}
+                      accessibilityRole="button"
+                      style={styles.match}
+                      onPress={() => {
+                        setSelectedItem(i);
+                        setItemSearchText('');
+                      }}
+                    >
+                      <Text style={styles.matchName}>{i.name}</Text>
+                      <Text style={type.mono}>{i.sku}</Text>
+                    </Pressable>
+                  ))}
+                </>
+              )}
+            </View>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <Field style={{ flex: 1 }} label="From" value={fromInput} onChangeText={setFromInput} placeholder="YYYY-MM-DD" />
+              <Field style={{ flex: 1 }} label="To" value={toInput} onChangeText={setToInput} placeholder="YYYY-MM-DD" />
+            </View>
+            {dateError && <Text style={styles.error}>{dateError}</Text>}
+            <Button title="Apply filters" variant="dark" height={48} onPress={handleApplyFilters} />
+          </Card>
+        )}
+
+        <Card padding={18} gap={14}>
+          <SectionTitle title="Sales vs. purchases" />
+          {svp ? (
+            <>
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={type.caption}>Sales revenue</Text>
+                  <Text style={styles.bigNum} adjustsFontSizeToFit numberOfLines={1}>
+                    {formatMoney(svp.totalSalesRevenue)}
+                  </Text>
+                </View>
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={type.caption}>Purchase cost</Text>
+                  <Text style={styles.bigNum} adjustsFontSizeToFit numberOfLines={1}>
+                    {formatMoney(svp.totalPurchaseCost)}
+                  </Text>
+                </View>
+              </View>
+              <View style={{ gap: 6 }} accessible accessibilityLabel="Sales compared with purchases">
+                <View style={[styles.svpBar, { width: `${(svp.totalSalesRevenue / svpMax) * 100}%`, backgroundColor: colors.primary }]} />
+                <View style={[styles.svpBar, { width: `${(svp.totalPurchaseCost / svpMax) * 100}%`, backgroundColor: colors.chevron }]} />
+              </View>
+              <KV
+                strong
+                label="Margin"
+                value={`${formatMoney(svp.margin)}${svp.totalSalesRevenue > 0 ? ` · ${((svp.margin / svp.totalSalesRevenue) * 100).toFixed(1)}%` : ''}`}
+                valueColor={svp.margin >= 0 ? colors.ok : colors.danger}
+              />
+              <KV label="Sales recorded" value={formatNumber(svp.saleCount)} />
+              <KV label="Purchases recorded" value={formatNumber(svp.purchaseCount)} />
+            </>
+          ) : (
+            <InlineEmpty>No data available.</InlineEmpty>
+          )}
+        </Card>
+
+        {isMainCompany && isOwnCompany && (
+          <Card padding={18} gap={14}>
+            <SectionTitle title="Margin by sub company" />
+            {!marginByCompany ? (
+              <InlineEmpty>Could not load company breakdown.</InlineEmpty>
+            ) : (
+              [...marginByCompany]
+                .sort((a, b) => b.margin - a.margin)
+                .map((row) => (
+                  <BarRow
+                    key={row.companyId}
+                    name={row.companyName}
+                    you={row.isMain}
+                    value={row.margin}
+                    max={companyMax}
+                    label={formatMoney(row.margin)}
+                    danger={row.margin < 0}
+                  />
+                ))
+            )}
+          </Card>
+        )}
+
+        <Card padding={18} gap={12}>
+          <SectionTitle
+            title="Stock on hand"
+            right={exportButton('stock on hand', () =>
+              handleExport('stock-on-hand.csv', stockOnHand, [
+                { key: 'sku', label: 'SKU' },
+                { key: 'name', label: 'Name' },
+                { key: 'category', label: 'Category' },
+                { key: 'quantityOnHand', label: 'Quantity On Hand' },
+                { key: 'unit', label: 'Unit' },
+                { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
+              ])
+            )}
+          />
+          {stockOnHand.length === 0 ? (
+            <InlineEmpty>No items yet.</InlineEmpty>
+          ) : (
+            <Table
+              cols={[2, 1.1, 0.9]}
+              head={['Item', 'On hand', 'Alert at']}
+              rows={limited('stock', stockOnHand).map((item) => {
+                const low = item.quantityOnHand <= item.lowStockThreshold;
+                return {
+                  key: item.id,
+                  cells: [item.name, { text: `${formatNumber(item.quantityOnHand)} ${item.unit}`, color: low ? colors.danger : undefined }, formatNumber(item.lowStockThreshold)],
+                };
+              })}
             />
-          </View>
-        ))
-      )}
-    </ScrollView>
+          )}
+          {showAll('stock', stockOnHand, 'items')}
+        </Card>
+
+        <Card padding={18} gap={12}>
+          <SectionTitle
+            title="Margin by item"
+            right={exportButton('margin by item', () =>
+              handleExport('margin-by-item.csv', marginByItem, [
+                { key: 'name', label: 'Item' },
+                { key: 'category', label: 'Category' },
+                { key: 'totalUnitsSold', label: 'Units Sold' },
+                { key: 'totalRevenue', label: 'Revenue' },
+                { key: 'estimatedCost', label: 'Estimated Cost' },
+                { key: 'estimatedMargin', label: 'Estimated Margin' },
+              ])
+            )}
+          />
+          {marginByItem.length === 0 ? (
+            <InlineEmpty>No sales recorded yet.</InlineEmpty>
+          ) : (
+            <Table
+              cols={[1.7, 0.7, 1.2, 1.2]}
+              head={['Item', 'Sold', 'Revenue', 'Est. margin']}
+              rows={limited('marginItem', marginByItem).map((row) => ({
+                key: row.itemId,
+                cells: [
+                  row.name,
+                  formatNumber(row.totalUnitsSold),
+                  formatMoney(row.totalRevenue),
+                  { text: formatMoney(row.estimatedMargin), color: row.estimatedMargin >= 0 ? colors.ok : colors.danger },
+                ],
+              }))}
+            />
+          )}
+          {showAll('marginItem', marginByItem, 'items')}
+        </Card>
+
+        <Card padding={18} gap={12}>
+          <SectionTitle
+            title="Margin by category"
+            right={exportButton('margin by category', () =>
+              handleExport('margin-by-category.csv', marginByCategory, [
+                { key: 'category', label: 'Category' },
+                { key: 'totalRevenue', label: 'Revenue' },
+                { key: 'estimatedCost', label: 'Estimated Cost' },
+                { key: 'estimatedMargin', label: 'Estimated Margin' },
+              ])
+            )}
+          />
+          {marginByCategory.length === 0 ? (
+            <InlineEmpty>No sales recorded yet.</InlineEmpty>
+          ) : (
+            <View style={styles.tiles}>
+              {marginByCategory.map((row) => (
+                <View key={row.category} style={styles.catTile}>
+                  <Text style={type.caption} numberOfLines={1}>
+                    {row.category}
+                  </Text>
+                  <Text style={[styles.catValue, row.estimatedMargin < 0 && { color: colors.danger }]}>{formatMoney(row.estimatedMargin)}</Text>
+                  <Text style={type.caption}>of {formatMoney(row.totalRevenue)} revenue</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </Card>
+
+        <Card padding={18} gap={12}>
+          <SectionTitle
+            title="Per-transaction margin"
+            right={exportButton('transaction margins', () =>
+              handleExport('transaction-margins.csv', transactionMargins, [
+                { key: 'itemName', label: 'Item' },
+                { key: 'sku', label: 'SKU' },
+                { key: 'occurredAt', label: 'Date' },
+                { key: 'quantity', label: 'Quantity' },
+                { key: 'unitPrice', label: 'Sale Price' },
+                { key: 'estimatedCost', label: 'Estimated Cost' },
+                { key: 'estimatedMargin', label: 'Estimated Margin' },
+              ])
+            )}
+          />
+          <Text style={[type.caption, { marginTop: -6 }]}>Up to the 50 most recent matching sales.</Text>
+          {transactionMargins.length === 0 ? (
+            <InlineEmpty>No sales recorded yet.</InlineEmpty>
+          ) : (
+            <Table
+              cols={[2, 1, 1]}
+              head={['Recent sale', 'Price', 'Margin']}
+              rows={limited('tx', transactionMargins).map((tx) => ({
+                key: tx.transactionId,
+                cells: [
+                  { text: `${tx.itemName || 'Unknown item'} × ${formatNumber(tx.quantity)}`, sub: formatDate(tx.occurredAt) },
+                  formatMoney(tx.unitPrice),
+                  tx.costAvailable
+                    ? { text: formatMoney(tx.estimatedMargin), color: tx.estimatedMargin >= 0 ? colors.ok : colors.danger }
+                    : { text: 'No cost data', color: colors.ink3 },
+                ],
+              }))}
+            />
+          )}
+          {showAll('tx', transactionMargins, 'sales')}
+        </Card>
+
+        <Card padding={18} gap={12}>
+          <SectionTitle
+            title="Discrepancy report"
+            right={exportButton('discrepancies', () =>
+              handleExport('discrepancies.csv', discrepancies, [
+                { key: 'itemName', label: 'Item' },
+                { key: 'sku', label: 'SKU' },
+                { key: 'occurredAt', label: 'Date' },
+                { key: 'expected', label: 'Expected (System)' },
+                { key: 'counted', label: 'Counted (Physical)' },
+                { key: 'discrepancy', label: 'Discrepancy' },
+              ])
+            )}
+          />
+          <Text style={[type.caption, { marginTop: -6 }]}>Expected (system) vs. counted (physical) stock for every manual adjustment.</Text>
+          {discrepancies.length === 0 ? (
+            <InlineEmpty>No stock adjustments recorded yet.</InlineEmpty>
+          ) : (
+            <Table
+              cols={[1.8, 0.9, 0.9, 0.7]}
+              head={['Item', 'Expected', 'Counted', 'Diff']}
+              rows={limited('disc', discrepancies).map((d) => ({
+                key: d.transactionId,
+                cells: [
+                  { text: d.itemName || 'Unknown item', sub: formatDate(d.occurredAt) },
+                  d.discrepancyKnown ? formatNumber(d.expected) : 'Unknown',
+                  formatNumber(d.counted),
+                  !d.discrepancyKnown
+                    ? { text: '—', color: colors.ink3 }
+                    : {
+                        text: `${d.discrepancy > 0 ? '+' : d.discrepancy < 0 ? '−' : ''}${Math.abs(d.discrepancy)}`,
+                        color: d.discrepancy === 0 ? undefined : d.discrepancy > 0 ? colors.ok : colors.danger,
+                      },
+                ],
+              }))}
+            />
+          )}
+          {showAll('disc', discrepancies, 'adjustments')}
+        </Card>
+
+        <Card padding={18} gap={12}>
+          <SectionTitle
+            title="Price trend"
+            right={exportButton('price trend', () =>
+              handleExport(`price-trend-${selectedItem ? selectedItem.sku : 'item'}.csv`, priceTrend, [
+                { key: 'effectiveDate', label: 'Date' },
+                { key: 'priceType', label: 'Type' },
+                { key: 'amount', label: 'Amount' },
+              ])
+            )}
+          />
+          {!appliedFilters.itemId ? (
+            <View style={{ gap: 10 }}>
+              <InlineEmpty>Choose an item in Filters to see how its prices have moved.</InlineEmpty>
+              <Button title="Choose an item" variant="secondary" icon="filter" height={44} onPress={() => setFiltersOpen(true)} style={{ alignSelf: 'flex-start' }} />
+            </View>
+          ) : priceTrend.length === 0 ? (
+            <InlineEmpty>No price history recorded yet for {appliedFilters.itemName}.</InlineEmpty>
+          ) : (
+            <>
+              <Text style={styles.trendItem}>{appliedFilters.itemName}</Text>
+              <PriceTrendChart history={priceTrend} />
+            </>
+          )}
+        </Card>
+
+        <Card padding={18} gap={12}>
+          <SectionTitle title="Scheduled reports" />
+          <Text style={[type.caption, { marginTop: -6 }]}>
+            A summary is generated automatically once a day and appears here. There is no email or push delivery.
+          </Text>
+          {snapshots.length === 0 ? (
+            <InlineEmpty>No automatic reports generated yet.</InlineEmpty>
+          ) : (
+            <View>
+              {limited('snap', snapshots).map((s, i) => (
+                <View key={s.id}>
+                  {i > 0 && <Divider />}
+                  <View style={styles.snapRow}>
+                    <Icon name="calendar" size={20} color={colors.ink3} />
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text style={styles.snapTitle}>{formatDateTime(s.generatedAt)}</Text>
+                      <Text style={type.caption}>
+                        {formatNumber(s.itemCount)} items · {formatNumber(s.lowStockCount)} low · {formatMoney(s.totalSalesRevenue)} sales
+                      </Text>
+                    </View>
+                    <Text style={[styles.snapMargin, { color: s.margin >= 0 ? colors.ok : colors.danger }]}>{formatMoney(s.margin)}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+          {showAll('snap', snapshots, 'snapshots')}
+          <Button title="Generate snapshot now" variant="secondary" icon="sync" height={48} onPress={handleGenerateSnapshot} loading={generatingSnapshot} />
+        </Card>
+      </ScrollView>
+    </Screen>
   );
 }
 
-function Row({ label, value, valueStyle }) {
+// Compact table: first column left-aligned, the rest right-aligned numbers. A cell may be a
+// string or { text, color, sub }.
+function Table({ cols, head, rows }) {
   return (
-    <View style={styles.row}>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={[styles.rowValue, valueStyle]}>{value}</Text>
+    <View>
+      <View style={[styles.tr, styles.thead]}>
+        {head.map((h, i) => (
+          <Text key={h} style={[styles.th, { flex: cols[i] }, i > 0 && styles.num]}>
+            {h}
+          </Text>
+        ))}
+      </View>
+      {rows.map((r) => (
+        <View key={r.key} style={styles.tr}>
+          {r.cells.map((c, i) => {
+            const cell = typeof c === 'object' && c !== null ? c : { text: c };
+            return (
+              <View key={i} style={{ flex: cols[i] }}>
+                <Text style={[styles.td, i > 0 && styles.num, cell.color && { color: cell.color }]} numberOfLines={2}>
+                  {cell.text}
+                </Text>
+                {cell.sub ? <Text style={[type.caption, i > 0 && styles.num]}>{cell.sub}</Text> : null}
+              </View>
+            );
+          })}
+        </View>
+      ))}
     </View>
   );
-}
-
-function SectionHeader({ title, onExport }) {
-  return (
-    <View style={styles.sectionHeaderRow}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      <TouchableOpacity onPress={onExport}>
-        <Text style={styles.exportText}>Export CSV</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-function formatMoney(n) {
-  return `$${Number(n || 0).toFixed(2)}`;
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  companyLabel: { fontSize: 13, color: '#888', marginBottom: 8 },
-  syncLabel: { fontSize: 11, color: '#999', marginBottom: 12 },
-  error: { color: '#d9534f', marginBottom: 12, fontSize: 13 },
-  refreshButton: { alignSelf: 'flex-end', marginBottom: 12 },
-  refreshText: { color: '#2f6fed', fontWeight: '600' },
-  sectionTitle: { fontSize: 16, fontWeight: '700', marginTop: 20, marginBottom: 8 },
-  sectionHeaderRow: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20,
+  readOnlyWrap: { paddingHorizontal: 20, paddingTop: 2, paddingBottom: 12, gap: 14 },
+  content: { paddingHorizontal: 20, paddingBottom: 32, gap: 16 },
+  filterScroll: { marginHorizontal: -20, flexGrow: 0 },
+  filterChips: { paddingHorizontal: 20, gap: 8 },
+  match: { paddingVertical: 10, paddingHorizontal: 4, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  matchName: { fontFamily: fonts.medium, fontSize: 14, flex: 1 },
+  error: { fontSize: 12, color: colors.danger, fontFamily: fonts.medium },
+  link: { fontFamily: fonts.semibold, fontSize: 14, color: colors.primary },
+  showAll: { paddingVertical: 6 },
+  csv: {
+    height: 36, paddingHorizontal: 10, borderRadius: 10, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
   },
-  exportText: { color: '#2f6fed', fontWeight: '600', fontSize: 12 },
-  card: { backgroundColor: '#f4f6fb', borderRadius: 10, padding: 12 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
-  rowLabel: { color: '#666', fontSize: 13 },
-  rowValue: { fontWeight: '600', fontSize: 13 },
-  positive: { color: '#2e9c4c' },
-  negative: { color: '#d9534f' },
-  muted: { color: '#999', fontWeight: '400' },
-  empty: { color: '#999', fontSize: 13 },
-  itemRow: {
-    flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8,
-    borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
-  },
-  itemName: { fontSize: 14, fontWeight: '600' },
-  itemQty: { fontSize: 14 },
-  marginCard: {
-    backgroundColor: '#f4f6fb', borderRadius: 10, padding: 12, marginBottom: 10,
-  },
-  filterLabel: { fontSize: 12, color: '#666', marginBottom: 4, marginTop: 8 },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 10, fontSize: 14, backgroundColor: '#fff' },
-  filterChip: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#eef2fd', borderRadius: 14, paddingVertical: 6, paddingHorizontal: 12,
-  },
-  filterChipText: { color: '#2f6fed', fontWeight: '600', fontSize: 13 },
-  filterChipClear: { color: '#2f6fed', fontWeight: '700', fontSize: 16, paddingHorizontal: 6 },
-  itemMatchRow: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#e5e9f2' },
-  itemMatchText: { fontSize: 13, color: '#333' },
-  applyButton: {
-    backgroundColor: '#2f6fed', borderRadius: 8, padding: 12, alignItems: 'center', marginTop: 12,
-  },
-  applyButtonText: { color: '#fff', fontWeight: '600' },
+  csvText: { fontFamily: fonts.semibold, fontSize: 12, color: colors.ink2 },
+  bigNum: { fontFamily: fonts.display, fontSize: 24, letterSpacing: -0.5 },
+  svpBar: { height: 10, borderRadius: 5, minWidth: 4 },
+  tiles: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  catTile: { flexBasis: '47%', flexGrow: 1, padding: 12, borderRadius: 14, backgroundColor: colors.surfaceMuted, gap: 3 },
+  catValue: { fontFamily: fonts.semibold, fontSize: 16, fontVariant: ['tabular-nums'] },
+  trendItem: { fontFamily: fonts.semibold, fontSize: 14, color: colors.ink2 },
+  snapRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  snapTitle: { fontFamily: fonts.semibold, fontSize: 14 },
+  snapMargin: { fontFamily: fonts.semibold, fontSize: 14, fontVariant: ['tabular-nums'] },
+  tr: { flexDirection: 'row', gap: 8, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.lineSoft, alignItems: 'flex-start' },
+  thead: { paddingTop: 0, paddingBottom: 8, borderBottomColor: colors.line },
+  th: { fontFamily: fonts.semibold, fontSize: 12, color: colors.ink3 },
+  td: { fontSize: 13, color: colors.ink, fontVariant: ['tabular-nums'] },
+  num: { textAlign: 'right' },
 });

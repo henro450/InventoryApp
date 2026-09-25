@@ -1,19 +1,24 @@
-import React, { useCallback, useState } from 'react';
-import {
-  View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator,
-  Modal, TextInput, Alert,
-} from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { View, FlatList, StyleSheet, Alert, RefreshControl } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../api/client';
+import {
+  Text, Screen, NavHeader, IconButton, SearchField, Card, LetterTile, Pill, Button, Banner, EmptyState, Loading,
+  Field, Sheet,
+} from '../components/ui';
+import { colors, fonts, type } from '../theme';
 
-// ROLE-05: Main Company can create, rename, deactivate, and reactivate Sub Company accounts.
+const EMPTY_FORM = { companyName: '', adminName: '', email: '', password: '' };
+
 export default function ManageSubCompaniesScreen() {
   const [subCompanies, setSubCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [query, setQuery] = useState('');
 
   const [creating, setCreating] = useState(false);
-  const [createForm, setCreateForm] = useState({ companyName: '', adminName: '', email: '', password: '' });
+  const [createForm, setCreateForm] = useState(EMPTY_FORM);
   const [createSubmitting, setCreateSubmitting] = useState(false);
 
   const [editingCompany, setEditingCompany] = useState(null);
@@ -23,8 +28,8 @@ export default function ManageSubCompaniesScreen() {
   const [togglingId, setTogglingId] = useState(null);
 
   const load = useCallback(() => {
-    setLoading(true);
-    api
+    setError(null);
+    return api
       .getMyCompany()
       .then(({ subCompanies: subs }) => setSubCompanies(subs))
       .catch((err) => setError(err.message))
@@ -37,6 +42,12 @@ export default function ManageSubCompaniesScreen() {
     }, [load])
   );
 
+  async function handleRefresh() {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }
+
   async function handleCreate() {
     const { companyName, adminName, email, password } = createForm;
     if (!companyName || !adminName || !email || !password) {
@@ -46,7 +57,7 @@ export default function ManageSubCompaniesScreen() {
     setCreateSubmitting(true);
     try {
       await api.createSubCompany(createForm);
-      setCreateForm({ companyName: '', adminName: '', email: '', password: '' });
+      setCreateForm(EMPTY_FORM);
       setCreating(false);
       load();
     } catch (err) {
@@ -78,7 +89,7 @@ export default function ManageSubCompaniesScreen() {
     }
   }
 
-  async function handleToggleActive(company) {
+  async function toggleActive(company) {
     setTogglingId(company.id);
     try {
       if (company.isActive) {
@@ -94,150 +105,154 @@ export default function ManageSubCompaniesScreen() {
     }
   }
 
+  function handleToggleActive(company) {
+    if (!company.isActive) {
+      toggleActive(company);
+      return;
+    }
+    Alert.alert('Deactivate Sub Company', `Deactivate "${company.name}"? Its users can no longer sign in until you reactivate it.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Deactivate', style: 'destructive', onPress: () => toggleActive(company) },
+    ]);
+  }
+
+  const setField = (key) => (v) => setCreateForm((f) => ({ ...f, [key]: v }));
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? subCompanies.filter((c) => c.name.toLowerCase().includes(q)) : subCompanies;
+  }, [subCompanies, query]);
+
+  const header = (
+    <NavHeader
+      title="Sub companies"
+      right={<IconButton icon="plus" label="Add sub company" variant="soft" onPress={() => setCreating(true)} iconSize={22} />}
+    />
+  );
+
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator />
-      </View>
+      <Screen>
+        {header}
+        <Loading />
+      </Screen>
     );
   }
 
   return (
-    <View style={styles.container}>
-      {error && <Text style={styles.error}>Could not load Sub Companies (are you offline?): {error}</Text>}
-
-      <TouchableOpacity style={styles.createButton} onPress={() => setCreating(true)}>
-        <Text style={styles.createButtonText}>+ Add Sub Company</Text>
-      </TouchableOpacity>
-
-      {subCompanies.length === 0 ? (
-        <View style={styles.emptyBox}>
-          <Text style={styles.emptyTitle}>No Sub Companies yet</Text>
-          <Text style={styles.emptyText}>
-            Add one above to get started — or keep using the app standalone; nothing else
-            requires a Sub Company to work.
-          </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={subCompanies}
-          keyExtractor={(c) => String(c.id)}
-          contentContainerStyle={{ paddingTop: 16 }}
-          renderItem={({ item }) => (
-            <View style={styles.subCard}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.subName}>{item.name}</Text>
-                <Text style={styles.subMeta}>{item.isActive ? 'Active' : 'Deactivated'}</Text>
-              </View>
-              <View style={styles.subActions}>
-                <TouchableOpacity onPress={() => openEdit(item)}>
-                  <Text style={styles.actionText}>Edit</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => handleToggleActive(item)} disabled={togglingId === item.id}>
-                  {togglingId === item.id ? (
-                    <ActivityIndicator size="small" />
-                  ) : (
-                    <Text style={[styles.actionText, item.isActive && styles.actionTextDanger]}>
-                      {item.isActive ? 'Deactivate' : 'Reactivate'}
-                    </Text>
-                  )}
-                </TouchableOpacity>
-              </View>
+    <Screen>
+      {header}
+      <FlatList
+        data={visible}
+        keyExtractor={(c) => String(c.id)}
+        contentContainerStyle={styles.content}
+        ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={
+          <View style={{ gap: 14, paddingBottom: 14 }}>
+            <Text style={type.small}>
+              {subCompanies.length === 1 ? '1 company' : `${subCompanies.length} companies`} linked to your account. Each gets its own admin
+              login and inventory.
+            </Text>
+            {error && <Banner kind="error" title="Couldn't load Sub Companies" subtitle={`Are you offline? ${error}`} actionLabel="Retry" onAction={handleRefresh} />}
+            {subCompanies.length > 3 && <SearchField value={query} onChangeText={setQuery} placeholder="Search sub companies" />}
+          </View>
+        }
+        ListEmptyComponent={
+          subCompanies.length === 0 ? (
+            <Card>
+              <EmptyState
+                icon="building"
+                title="No Sub Companies yet"
+                body="Add one to get started, or keep using the app standalone. Nothing else requires a Sub Company to work."
+              >
+                <Button title="Add sub company" icon="plus" height={48} onPress={() => setCreating(true)} style={{ marginTop: 8 }} />
+              </EmptyState>
+            </Card>
+          ) : (
+            <EmptyState icon="search" title="No matches" body="Try a different name." />
+          )
+        }
+        renderItem={({ item }) => (
+          <Card padding={16}>
+            <View style={styles.topRow}>
+              <LetterTile label={item.name} muted={!item.isActive} />
+              <Text style={[styles.name, !item.isActive && { color: colors.ink2 }]} numberOfLines={2}>
+                {item.name}
+              </Text>
+              {item.isActive ? <Pill kind="ok" label="Active" /> : <Pill kind="muted" label="Deactivated" />}
             </View>
-          )}
+            <View style={styles.actions}>
+              <Button title="Rename" variant="secondary" icon="pencil" height={44} style={{ flex: 1 }} onPress={() => openEdit(item)} />
+              <Button
+                title={item.isActive ? 'Deactivate' : 'Reactivate'}
+                variant={item.isActive ? 'danger' : 'secondary'}
+                height={44}
+                style={{ flex: 1 }}
+                loading={togglingId === item.id}
+                onPress={() => handleToggleActive(item)}
+              />
+            </View>
+          </Card>
+        )}
+      />
+
+      <Sheet
+        visible={creating}
+        onClose={() => setCreating(false)}
+        title="Add sub company"
+        description="Creates the company and its first admin login. You can rename or deactivate it later."
+        footer={
+          <>
+            <Button title="Cancel" variant="secondary" style={{ flex: 1 }} onPress={() => setCreating(false)} />
+            <Button title="Create company" style={{ flex: 1 }} onPress={handleCreate} loading={createSubmitting} />
+          </>
+        }
+      >
+        <Field label="Company name" leadingIcon="building" placeholder="e.g. Lekki Warehouse" value={createForm.companyName} onChangeText={setField('companyName')} />
+        <Field label="Admin name" leadingIcon="user" placeholder="Full name" value={createForm.adminName} onChangeText={setField('adminName')} />
+        <Field
+          label="Admin email"
+          leadingIcon="mail"
+          placeholder="admin@company.com"
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="email-address"
+          value={createForm.email}
+          onChangeText={setField('email')}
         />
-      )}
+        <Field
+          label="Temporary password"
+          leadingIcon="lock"
+          placeholder="Admin password"
+          secureTextEntry
+          value={createForm.password}
+          onChangeText={setField('password')}
+          hint="Share it with the admin securely. They sign in with this email and password."
+        />
+      </Sheet>
 
-      {/* Create modal */}
-      <Modal visible={creating} animationType="slide" transparent onRequestClose={() => setCreating(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Add Sub Company</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Company name"
-              value={createForm.companyName}
-              onChangeText={(v) => setCreateForm((f) => ({ ...f, companyName: v }))}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Admin name"
-              value={createForm.adminName}
-              onChangeText={(v) => setCreateForm((f) => ({ ...f, adminName: v }))}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Admin email"
-              autoCapitalize="none"
-              keyboardType="email-address"
-              value={createForm.email}
-              onChangeText={(v) => setCreateForm((f) => ({ ...f, email: v }))}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="Admin password"
-              secureTextEntry
-              value={createForm.password}
-              onChangeText={(v) => setCreateForm((f) => ({ ...f, password: v }))}
-            />
-            <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalCancel} onPress={() => setCreating(false)}>
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalSave} onPress={handleCreate} disabled={createSubmitting}>
-                {createSubmitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.modalSaveText}>Create</Text>}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Edit modal */}
-      <Modal visible={!!editingCompany} animationType="slide" transparent onRequestClose={() => setEditingCompany(null)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Rename Sub Company</Text>
-            <TextInput style={styles.input} value={editName} onChangeText={setEditName} placeholder="Company name" />
-            <View style={styles.modalActions}>
-              <TouchableOpacity style={styles.modalCancel} onPress={() => setEditingCompany(null)}>
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalSave} onPress={handleEditSave} disabled={editSubmitting}>
-                {editSubmitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.modalSaveText}>Save</Text>}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </View>
+      <Sheet
+        visible={!!editingCompany}
+        onClose={() => setEditingCompany(null)}
+        title="Rename sub company"
+        footer={
+          <>
+            <Button title="Cancel" variant="secondary" style={{ flex: 1 }} onPress={() => setEditingCompany(null)} />
+            <Button title="Save" style={{ flex: 1 }} onPress={handleEditSave} loading={editSubmitting} />
+          </>
+        }
+      >
+        <Field label="Company name" leadingIcon="building" value={editName} onChangeText={setEditName} placeholder="Company name" autoFocus />
+      </Sheet>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#fff' },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  error: { color: '#d9534f', marginBottom: 12 },
-  createButton: { backgroundColor: '#2f6fed', borderRadius: 8, padding: 12, alignItems: 'center' },
-  createButtonText: { color: '#fff', fontWeight: '600' },
-  emptyBox: { padding: 16, backgroundColor: '#f4f6fb', borderRadius: 10, marginTop: 16 },
-  emptyTitle: { fontWeight: '600', marginBottom: 6 },
-  emptyText: { color: '#666', fontSize: 13, lineHeight: 18 },
-  subCard: {
-    padding: 14, borderWidth: 1, borderColor: '#eee', borderRadius: 10, marginBottom: 10,
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-  },
-  subName: { fontSize: 16, fontWeight: '600' },
-  subMeta: { color: '#888' },
-  subActions: { flexDirection: 'row', gap: 16, alignItems: 'center' },
-  actionText: { color: '#2f6fed', fontWeight: '600', fontSize: 13 },
-  actionTextDanger: { color: '#d9534f' },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 24 },
-  modalCard: { backgroundColor: '#fff', borderRadius: 12, padding: 20 },
-  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 16 },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 12 },
-  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 8 },
-  modalCancel: { padding: 10 },
-  modalCancelText: { color: '#666', fontWeight: '600' },
-  modalSave: { backgroundColor: '#2f6fed', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 18 },
-  modalSaveText: { color: '#fff', fontWeight: '600' },
+  content: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 32 },
+  topRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  name: { flex: 1, fontFamily: fonts.semibold, fontSize: 16 },
+  actions: { flexDirection: 'row', gap: 10 },
 });

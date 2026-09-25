@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "splash": {
-      "backgroundColor": "#FFFFFF"
+      "backgroundColor": "#0E1322"
     },
     "android": {
       "package": "com.yourcompany.inventoryapp",
@@ -20,12 +20,14 @@
       "bundleIdentifier": "com.yourcompany.inventoryapp"
     },
     "plugins": [
+      "./plugins/withBundledSQLite",
       [
         "expo-camera",
         {
           "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to scan item barcodes."
         }
-      ]
+      ],
+      "expo-font"
     ],
     "extra": {
       "eas": {

@@ -1,10 +1,15 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Platform, Pressable } from 'react-native';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
-import { upsertLocalItem } from '../db/localDb';
+import { getLocalItems, saveLocalItem } from '../db/localDb';
 import { useAuth } from '../context/AuthContext';
 import { runSync } from '../sync/syncEngine';
+import Icon from '../components/Icon';
+import { Text, Screen, NavHeader, Field, Chip, Stepper, BottomBar, Button } from '../components/ui';
+import { colors, fonts, type } from '../theme';
+
+const UNIT_PRESETS = ['unit', 'box', 'kg', 'm', 'pair', 'litre'];
 
 // INV-01/INV-06: item creation now works fully offline. The item is written to the local
 // queue immediately with syncStatus = 'pending' and a client-generated id (clientItemId).
@@ -23,10 +28,22 @@ export default function AddItemScreen({ navigation, route }) {
   const [name, setName] = useState(editingItem?.name ?? '');
   const [category, setCategory] = useState(editingItem?.category ?? '');
   const [unit, setUnit] = useState(editingItem?.unit ?? 'unit');
+  const [customUnit, setCustomUnit] = useState(!!editingItem && !UNIT_PRESETS.includes(editingItem.unit));
   const [lowStockThreshold, setLowStockThreshold] = useState(
     editingItem?.lowStockThreshold != null ? String(editingItem.lowStockThreshold) : ''
   );
   const [submitting, setSubmitting] = useState(false);
+
+  // Suggest the categories this company already uses, most common first.
+  const categorySuggestions = useMemo(() => {
+    const counts = {};
+    for (const i of getLocalItems(user.companyId)) {
+      if (i.category) counts[i.category] = (counts[i.category] || 0) + 1;
+    }
+    return Object.keys(counts)
+      .sort((a, b) => counts[b] - counts[a])
+      .slice(0, 6);
+  }, [user.companyId]);
 
   async function handleSave() {
     if (!sku || !name) {
@@ -37,7 +54,7 @@ export default function AddItemScreen({ navigation, route }) {
 
     try {
       if (isEditMode) {
-        upsertLocalItem({
+        saveLocalItem({
           ...editingItem,
           name,
           category: category || null,
@@ -49,7 +66,7 @@ export default function AddItemScreen({ navigation, route }) {
         });
       } else {
         const clientItemId = uuidv4();
-        upsertLocalItem({
+        saveLocalItem({
           id: null,
           localId: clientItemId,
           clientItemId,
@@ -79,68 +96,107 @@ export default function AddItemScreen({ navigation, route }) {
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.label}>SKU</Text>
-      {isEditMode ? (
-        <Text style={styles.readOnlyValue}>{sku}</Text>
-      ) : (
-        <View style={styles.skuRow}>
-          <TextInput
-            style={[styles.input, styles.skuInput]}
-            value={sku}
-            onChangeText={setSku}
-            placeholder="e.g. SKU-1001"
-          />
-          <TouchableOpacity
-            style={styles.scanButton}
-            onPress={() => navigation.navigate('ScanBarcode', { onScanned: (code) => setSku(code) })}
-          >
-            <Text style={styles.scanButtonText}>Scan</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+    <Screen>
+      <NavHeader title={isEditMode ? 'Edit item' : 'New item'} />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          {isEditMode ? (
+            <View style={{ gap: 8 }}>
+              <Text style={type.label}>SKU</Text>
+              <View style={styles.readOnly}>
+                <Text style={styles.readOnlyText}>{sku}</Text>
+                <Icon name="lock" size={18} color={colors.ink3} />
+              </View>
+              <Text style={type.caption}>SKU can't be changed after the item is saved.</Text>
+            </View>
+          ) : (
+            <Field
+              label="SKU"
+              value={sku}
+              onChangeText={setSku}
+              placeholder="e.g. SKU-1001"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              mono
+              hint="SKU can't be changed after the item is saved."
+              trailing={
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Scan SKU barcode"
+                  onPress={() => navigation.navigate('ScanBarcode', { onScanned: (code) => setSku(code) })}
+                  style={({ pressed }) => [styles.scanButton, pressed && { opacity: 0.7 }]}
+                >
+                  <Icon name="scan" size={18} color={colors.primary} strokeWidth={2} />
+                  <Text style={styles.scanText}>Scan</Text>
+                </Pressable>
+              }
+            />
+          )}
 
-      <Text style={styles.label}>Name</Text>
-      <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="e.g. Widget" />
+          <Field label="Item name" value={name} onChangeText={setName} placeholder="e.g. Widget" />
 
-      <Text style={styles.label}>Category</Text>
-      <TextInput style={styles.input} value={category} onChangeText={setCategory} placeholder="Optional" />
+          <View style={{ gap: 8 }}>
+            <Field label="Category" optional value={category} onChangeText={setCategory} placeholder="e.g. Hardware" />
+            {categorySuggestions.length > 0 && (
+              <View style={styles.chips}>
+                {categorySuggestions.map((c) => (
+                  <Chip key={c} label={c} active={category === c} onPress={() => setCategory(category === c ? '' : c)} />
+                ))}
+              </View>
+            )}
+          </View>
 
-      <Text style={styles.label}>Unit</Text>
-      <TextInput style={styles.input} value={unit} onChangeText={setUnit} placeholder="e.g. unit, kg, box" />
+          <View style={{ gap: 8 }}>
+            <Text style={type.label}>Unit</Text>
+            <View style={styles.chips} accessibilityRole="radiogroup">
+              {UNIT_PRESETS.map((u) => (
+                <Chip
+                  key={u}
+                  label={u}
+                  active={!customUnit && unit === u}
+                  onPress={() => {
+                    setCustomUnit(false);
+                    setUnit(u);
+                  }}
+                />
+              ))}
+              <Chip label="Other" active={customUnit} onPress={() => setCustomUnit(true)} />
+            </View>
+            {customUnit && (
+              <Field value={unit} onChangeText={setUnit} placeholder="e.g. roll, can, bag" accessibilityLabel="Custom unit" autoCapitalize="none" />
+            )}
+          </View>
 
-      <Text style={styles.label}>Low stock threshold</Text>
-      <TextInput
-        style={styles.input}
-        value={lowStockThreshold}
-        onChangeText={setLowStockThreshold}
-        placeholder="0"
-        keyboardType="numeric"
-      />
+          <View style={{ gap: 8 }}>
+            <Stepper label="Low-stock alert at" value={lowStockThreshold} onChange={setLowStockThreshold} />
+            <Text style={type.caption}>You get an alert when stock falls to this level.</Text>
+          </View>
+        </ScrollView>
 
-      <TouchableOpacity style={styles.button} onPress={handleSave} disabled={submitting}>
-        {submitting ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>{isEditMode ? 'Save Changes' : 'Save Item'}</Text>
-        )}
-      </TouchableOpacity>
-
-      <Text style={styles.note}>Works offline — this item will sync automatically once you're back online.</Text>
-    </View>
+        <BottomBar>
+          <Button title={isEditMode ? 'Save changes' : 'Save item'} onPress={handleSave} loading={submitting} />
+          <View style={styles.offline}>
+            <Icon name="cloud" size={16} color={colors.ink3} strokeWidth={2} />
+            <Text style={type.caption}>Works offline. Syncs when you are back online.</Text>
+          </View>
+        </BottomBar>
+      </KeyboardAvoidingView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#fff' },
-  label: { fontSize: 13, color: '#666', marginBottom: 6, marginTop: 12 },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 12, fontSize: 16 },
-  skuRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  skuInput: { flex: 1 },
-  scanButton: { backgroundColor: '#2f6fed', borderRadius: 8, paddingVertical: 12, paddingHorizontal: 16 },
-  scanButtonText: { color: '#fff', fontWeight: '600' },
-  readOnlyValue: { fontSize: 16, color: '#888', paddingVertical: 12 },
-  button: { backgroundColor: '#2f6fed', borderRadius: 8, padding: 14, alignItems: 'center', marginTop: 24 },
-  buttonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
-  note: { marginTop: 16, fontSize: 12, color: '#999', textAlign: 'center' },
+  content: { padding: 20, paddingTop: 12, gap: 22 },
+  readOnly: {
+    height: 52, borderRadius: 12, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+  },
+  readOnlyText: { fontFamily: fonts.mono, fontSize: 16, color: colors.ink2 },
+  scanButton: {
+    height: 40, paddingHorizontal: 12, borderRadius: 10, backgroundColor: colors.primarySoft,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+  },
+  scanText: { fontFamily: fonts.semibold, fontSize: 14, color: colors.primary },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  offline: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
 });
