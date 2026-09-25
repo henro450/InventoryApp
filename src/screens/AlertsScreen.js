@@ -15,7 +15,7 @@ export default function AlertsScreen({ route }) {
   const companyLabel = route?.params?.companyName;
   const isOwnCompany = companyId === user.companyId;
 
-  const lastSynced = getLastSyncedAt();
+  const lastSynced = getLastSyncedAt(user.id);
   const lastSyncedLabel = lastSynced
     ? `Data last synced: ${new Date(lastSynced).toLocaleString()}`
     : 'Not yet synced';

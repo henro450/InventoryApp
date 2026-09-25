@@ -2,11 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
 import { api } from '../api/client';
 import { getLastSyncedAt } from '../db/localDb';
+import { useAuth } from '../context/AuthContext';
 
 // RPT-07: side-by-side comparison across every company this Main Company can see (own +
 // linked Sub Companies), by metric. Own row is included and labeled, for full oversight
 // context rather than a Sub-Company-only peer comparison.
 export default function CompareSubCompaniesScreen() {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -23,7 +25,7 @@ export default function CompareSubCompaniesScreen() {
     })();
   }, []);
 
-  const lastSynced = getLastSyncedAt();
+  const lastSynced = getLastSyncedAt(user.id);
   const lastSyncedLabel = lastSynced
     ? `Data last synced: ${new Date(lastSynced).toLocaleString()}`
     : 'Not yet synced';

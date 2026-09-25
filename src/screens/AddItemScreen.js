@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
-import { upsertLocalItem } from '../db/localDb';
+import { saveLocalItem } from '../db/localDb';
 import { useAuth } from '../context/AuthContext';
 import { runSync } from '../sync/syncEngine';
 
@@ -37,7 +37,7 @@ export default function AddItemScreen({ navigation, route }) {
 
     try {
       if (isEditMode) {
-        upsertLocalItem({
+        saveLocalItem({
           ...editingItem,
           name,
           category: category || null,
@@ -49,7 +49,7 @@ export default function AddItemScreen({ navigation, route }) {
         });
       } else {
         const clientItemId = uuidv4();
-        upsertLocalItem({
+        saveLocalItem({
           id: null,
           localId: clientItemId,
           clientItemId,

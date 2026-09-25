@@ -48,7 +48,7 @@ export default function DashboardScreen({ navigation }) {
     );
   }
 
-  const lastSynced = getLastSyncedAt();
+  const lastSynced = getLastSyncedAt(user.id);
   const lastSyncedLabel = lastSynced
     ? `Data last synced: ${new Date(lastSynced).toLocaleString()}`
     : 'Not yet synced';

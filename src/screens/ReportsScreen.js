@@ -14,7 +14,7 @@ export default function ReportsScreen({ route }) {
   const { user, isMainCompany } = useAuth();
   const companyId = route?.params?.companyId || user.companyId;
   const companyLabel = route?.params?.companyName;
-  const lastSynced = getLastSyncedAt();
+  const lastSynced = getLastSyncedAt(user.id);
   const lastSyncedLabel = lastSynced
     ? `Data last synced: ${new Date(lastSynced).toLocaleString()}`
     : 'Not yet synced';

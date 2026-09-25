@@ -3,7 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'reac
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '../context/AuthContext';
-import { insertLocalTransaction, upsertLocalItem } from '../db/localDb';
+import { saveLocalStockTransaction } from '../db/localDb';
 import { runSync } from '../sync/syncEngine';
 
 // This screen is the client-side counterpart to PRC-07/PRC-08/PRC-09 on the server:
@@ -49,7 +49,7 @@ export default function StockTransactionScreen({ route, navigation }) {
     const priceWasDefaulted = type === 'out' && unitPrice.trim() === '';
     const resolvedPrice = priceWasDefaulted ? defaultedPriceValue : Number(unitPrice);
 
-    insertLocalTransaction({
+    const localTransaction = {
       clientTransactionId: uuidv4(),
       itemLocalId: item.localId,
       itemServerId: item.id, // may be null if the item itself hasn't synced yet
@@ -61,7 +61,7 @@ export default function StockTransactionScreen({ route, navigation }) {
       priceWasDefaulted,
       occurredAt: new Date().toISOString(),
       userId: user.id,
-    });
+    };
 
     // Reflect the change locally right away so the UI feels instant, regardless of
     // connectivity (matches server-side quantity logic in routes/transactions.js).
@@ -70,12 +70,13 @@ export default function StockTransactionScreen({ route, navigation }) {
       : type === 'out' ? item.quantityOnHand - qty
       : qty; // adjustment sets an absolute value
 
-    upsertLocalItem({
+    const updatedItem = {
       ...item,
       quantityOnHand: updatedQty,
       lastPurchasePrice: type === 'in' ? resolvedPrice : item.lastPurchasePrice,
       userId: user.id,
-    });
+    };
+    saveLocalStockTransaction(localTransaction, updatedItem);
 
     // Best-effort immediate sync; safe to fail silently offline (SYNC-01/SYNC-05).
     runSync(user.id);

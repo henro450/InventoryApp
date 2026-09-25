@@ -14,7 +14,6 @@ import ManageSubCompaniesScreen from '../screens/ManageSubCompaniesScreen';
 import CompareSubCompaniesScreen from '../screens/CompareSubCompaniesScreen';
 import ScanBarcodeScreen from '../screens/ScanBarcodeScreen';
 import AlertsScreen from '../screens/AlertsScreen';
-import { initLocalDb } from '../db/localDb';
 import { startConnectivityWatcher } from '../sync/syncEngine';
 
 const Stack = createNativeStackNavigator();
@@ -23,10 +22,6 @@ const Stack = createNativeStackNavigator();
 // additionally gets the Dashboard screen; a Sub Company user goes straight to Inventory.
 export default function RootNavigator() {
   const { user, loading, logout, isMainCompany } = useAuth();
-
-  useEffect(() => {
-    initLocalDb();
-  }, []);
 
   useEffect(() => {
     if (!user) return;

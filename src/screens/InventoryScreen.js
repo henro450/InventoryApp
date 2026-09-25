@@ -2,7 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
-import { getLocalItems, getPendingCount, upsertLocalItem, deleteLocalItem, getLastSyncedAt } from '../db/localDb';
+import { getLocalItems, getSyncStatusSummary, saveLocalItem, deleteLocalItem, getLastSyncedAt } from '../db/localDb';
 import { runSync } from '../sync/syncEngine';
 import { isLowStock } from '../utils/inventory';
 import { exportCsv, pickAndParseCsv } from '../utils/csvExport';
@@ -16,14 +16,14 @@ export default function InventoryScreen({ navigation, route }) {
   const viewingCompanyId = route?.params?.companyId || user.companyId;
   const isOwnCompany = viewingCompanyId === user.companyId;
   const [items, setItems] = useState([]);
-  const [pendingCount, setPendingCount] = useState(0);
+  const [syncSummary, setSyncSummary] = useState({ total: 0, pending: 0, failed: 0, conflict: 0 });
   const [refreshing, setRefreshing] = useState(false);
   const [showLowStockOnly, setShowLowStockOnly] = useState(false);
 
   const loadLocal = useCallback(() => {
     setItems(getLocalItems(viewingCompanyId));
-    setPendingCount(getPendingCount(user.id));
-  }, [viewingCompanyId]);
+    setSyncSummary(getSyncStatusSummary(user.id));
+  }, [viewingCompanyId, user.id]);
 
   useFocusEffect(
     useCallback(() => {
@@ -55,7 +55,7 @@ export default function InventoryScreen({ navigation, route }) {
             if (!item.id) {
               deleteLocalItem(item.localId);
             } else {
-              upsertLocalItem({ ...item, isActive: 0, syncStatus: 'pending' });
+              saveLocalItem({ ...item, isActive: 0, syncStatus: 'pending', userId: user.id });
               runSync(user.id);
             }
             loadLocal();
@@ -117,7 +117,7 @@ export default function InventoryScreen({ navigation, route }) {
         continue;
       }
       const clientItemId = uuidv4();
-      upsertLocalItem({
+      saveLocalItem({
         id: null,
         localId: clientItemId,
         clientItemId,
@@ -142,7 +142,7 @@ export default function InventoryScreen({ navigation, route }) {
   }
 
   const visibleItems = showLowStockOnly ? items.filter(isLowStock) : items;
-  const lastSynced = getLastSyncedAt();
+  const lastSynced = getLastSyncedAt(user.id);
   const lastSyncedLabel = lastSynced
     ? `Data last synced: ${new Date(lastSynced).toLocaleString()}`
     : 'Not yet synced';
@@ -158,7 +158,9 @@ export default function InventoryScreen({ navigation, route }) {
 
       <View style={styles.syncBar}>
         <Text style={styles.syncText}>
-          {pendingCount > 0 ? `${pendingCount} record(s) pending sync` : 'All synced'}
+          {syncSummary.total > 0 ? `${syncSummary.total} unsynced change(s)` : 'All synced'}
+          {syncSummary.conflict > 0 ? ` · ${syncSummary.conflict} need review` : ''}
+          {syncSummary.failed > 0 ? ` · ${syncSummary.failed} retrying` : ''}
         </Text>
         <TouchableOpacity
           style={[styles.filterChip, showLowStockOnly && styles.filterChipActive]}
@@ -210,6 +212,9 @@ export default function InventoryScreen({ navigation, route }) {
             <View style={{ flex: 1 }}>
               <Text style={styles.itemName}>{item.name}</Text>
               <Text style={styles.itemMeta}>{item.sku} · {item.category || 'Uncategorized'}</Text>
+              {item.syncStatus === 'conflict' && (
+                <Text style={styles.conflictText}>Changed elsewhere — edit or deactivate again to resolve</Text>
+              )}
               {isOwnCompany && (
                 <View style={styles.itemActions}>
                   <TouchableOpacity onPress={() => handleEdit(item)}>
@@ -266,6 +271,7 @@ const styles = StyleSheet.create({
   },
   itemName: { fontSize: 16, fontWeight: '600' },
   itemMeta: { fontSize: 13, color: '#888', marginTop: 2 },
+  conflictText: { fontSize: 11, color: '#b35c00', marginTop: 4 },
   itemActions: { flexDirection: 'row', gap: 16, marginTop: 6 },
   actionText: { color: '#2f6fed', fontWeight: '600', fontSize: 12 },
   actionTextDanger: { color: '#d9534f' },

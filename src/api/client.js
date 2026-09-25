@@ -126,6 +126,10 @@ export const api = {
   syncPush: (items, transactions, itemUpdates = []) =>
     request('/sync/push', { method: 'POST', body: { items, transactions, itemUpdates } }),
   syncPull: (since) => request(`/sync/pull?since=${encodeURIComponent(since || '1970-01-01T00:00:00.000Z')}`),
+  syncOperations: (operations) =>
+    request('/sync/operations', { method: 'POST', body: { operations } }),
+  syncChanges: (cursor = '0', limit = 500) =>
+    request(`/sync/changes?cursor=${encodeURIComponent(cursor)}&limit=${limit}`),
 };
 
 export async function saveToken(token) {
