@@ -4,6 +4,7 @@
     "slug": "inventory-app",
     "owner": "henro450",
     "version": "1.0.0",
+    "scheme": "beams",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "splash": {

@@ -44,6 +44,19 @@ export default function StockTransactionScreen({ route, navigation }) {
       return;
     }
 
+    if (type === 'out' && item.quantityOnHand <= 0) {
+      Alert.alert('Out of stock', `${item.name} has no stock available, so it can't be sold. Record a stock-in first.`);
+      return;
+    }
+
+    if (type === 'out' && qty > item.quantityOnHand) {
+      Alert.alert(
+        'Not enough stock',
+        `Only ${formatNumber(item.quantityOnHand)} ${item.unit} of ${item.name} available. Reduce the quantity sold.`
+      );
+      return;
+    }
+
     if (type === 'in' && !unitPrice) {
       Alert.alert('Price required', 'Please enter the purchase price for this stock-in.');
       return;
@@ -137,7 +150,7 @@ export default function StockTransactionScreen({ route, navigation }) {
               <Field
                 label={type === 'in' ? 'Purchase price per unit' : 'Sale price per unit'}
                 optional={type === 'out'}
-                prefix="$"
+                prefix="₦"
                 keyboardType="decimal-pad"
                 value={unitPrice}
                 onChangeText={setUnitPrice}
@@ -161,7 +174,11 @@ export default function StockTransactionScreen({ route, navigation }) {
             <Stat label={type === 'out' ? 'Stock after sale' : 'Stock after'} value={`${formatNumber(previewQty)} ${item.unit}`} />
             {previewPrice != null && qty > 0 && <Stat align="right" label={totalLabel} value={formatMoney(previewPrice * qty)} />}
           </View>
-          {previewQty < 0 && <Note kind="error" icon="alert">This sale takes stock below zero. Check the quantity before saving.</Note>}
+          {type === 'out' && item.quantityOnHand <= 0 ? (
+            <Note kind="error" icon="alert">This item is out of stock and can't be sold. Record a stock-in first.</Note>
+          ) : (
+            previewQty < 0 && <Note kind="error" icon="alert">Not enough stock. Only {formatNumber(item.quantityOnHand)} {item.unit} available.</Note>
+          )}
         </ScrollView>
 
         <BottomBar>

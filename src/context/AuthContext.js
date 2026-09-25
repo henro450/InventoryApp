@@ -13,7 +13,7 @@ import { ROLES } from '../constants/roles';
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null); // { id, name, email, role, companyId }
+  const [user, setUser] = useState(null); // { id, name, email, role, companyId, company: { allowSubCompanies } }
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -31,7 +31,10 @@ export function AuthProvider({ children }) {
         } else {
           const parsedUser = JSON.parse(cachedUser);
           setUser(parsedUser);
-          runSync(parsedUser.id); // AUTH-04: push any backlog left from an unclean exit right away
+          if (online) refreshCompany(parsedUser);
+          // AUTH-04: push any backlog left from an unclean exit right away. The SuperAdmin
+          // doesn't keep inventory on the device, so it never syncs.
+          if (parsedUser.role !== ROLES.SUPER) runSync(parsedUser.id);
         }
       }
       setLoading(false);
@@ -53,12 +56,31 @@ export function AuthProvider({ children }) {
     });
   }, []);
 
+  // The SuperAdmin can change whether a company may have Sub Companies at any time, so a
+  // restored session re-reads it rather than trusting the copy cached at login.
+  async function refreshCompany(currentUser) {
+    if (currentUser.role !== ROLES.MAIN) return;
+    try {
+      const { company } = await api.getMyCompany();
+      if (!company) return;
+      const updated = {
+        ...currentUser,
+        company: { id: company.id, name: company.name, type: company.type, allowSubCompanies: company.allowSubCompanies },
+      };
+      await SecureStore.setItemAsync('cachedUser', JSON.stringify(updated));
+      setUser((u) => (u && u.id === updated.id ? updated : u));
+    } catch {
+      // Offline or transient — keep the cached value.
+    }
+  }
+
   async function login(email, password) {
-    const { token, user: loggedInUser } = await api.login(email, password);
+    const { token, user: loggedInUser } = await api.login(email.trim(), password);
     await saveToken(token);
     await SecureStore.setItemAsync('cachedUser', JSON.stringify(loggedInUser));
     setUser(loggedInUser);
-    runSync(loggedInUser.id); // AUTH-04: sync any backlog belonging to this user immediately
+    // AUTH-04: sync any backlog belonging to this user immediately.
+    if (loggedInUser.role !== ROLES.SUPER) runSync(loggedInUser.id);
     return loggedInUser;
   }
 
@@ -85,10 +107,13 @@ export function AuthProvider({ children }) {
     performLogout();
   }
 
+  const isSuperAdmin = user?.role === ROLES.SUPER;
   const isMainCompany = user?.role === ROLES.MAIN;
+  // Sessions cached before this flag existed have no company info; the server still enforces it.
+  const allowSubCompanies = isMainCompany && user?.company?.allowSubCompanies !== false;
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, isMainCompany }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, isMainCompany, isSuperAdmin, allowSubCompanies }}>
       {children}
     </AuthContext.Provider>
   );

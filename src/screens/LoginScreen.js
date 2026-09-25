@@ -1,19 +1,26 @@
-import React, { useRef, useState } from 'react';
-import { View, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import Icon from '../components/Icon';
-import { Text, Field, Button, IconButton } from '../components/ui';
+import { Text, Field, Button, IconButton, Banner } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
-export default function LoginScreen() {
+// route.params.email / route.params.notice are set after a password is set from an emailed
+// link, so the user lands here with their email filled in and a confirmation banner.
+export default function LoginScreen({ navigation, route }) {
   const { login } = useAuth();
   const insets = useSafeAreaInsets();
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(route.params?.email || '');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const passwordRef = useRef(null);
+  const notice = route.params?.notice;
+
+  useEffect(() => {
+    if (route.params?.email) setEmail(route.params.email);
+  }, [route.params?.email]);
 
   async function handleLogin() {
     if (!email || !password) {
@@ -53,6 +60,7 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.form}>
+          {notice ? <Banner kind="ok" icon="check" title={notice} /> : null}
           <Field
             label="Work email"
             leadingIcon="mail"
@@ -89,7 +97,15 @@ export default function LoginScreen() {
               />
             }
           />
-          <Button title="Log in" onPress={handleLogin} loading={submitting} style={{ marginTop: 6 }} />
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => navigation.navigate('ForgotPassword', { email: email.trim() })}
+            hitSlop={8}
+            style={styles.forgot}
+          >
+            <Text style={styles.forgotText}>Forgot password?</Text>
+          </Pressable>
+          <Button title="Log in" onPress={handleLogin} loading={submitting} />
         </View>
 
         <View style={styles.offline}>
@@ -99,7 +115,9 @@ export default function LoginScreen() {
           </Text>
         </View>
 
-        <Text style={styles.footer}>One app for Main Company and Sub Company teams.{'\n'}Your role decides what you see.</Text>
+        <Text style={styles.footer}>
+          New company? Your administrator registers you, and you'll get an email to set your password.
+        </Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -115,6 +133,8 @@ const styles = StyleSheet.create({
   heading: { fontFamily: fonts.display, fontSize: 36, lineHeight: 40, letterSpacing: -0.9 },
   subtitle: { fontSize: 16, lineHeight: 24, color: colors.ink2 },
   form: { marginTop: 32, gap: 18 },
+  forgot: { alignSelf: 'flex-end', marginTop: -6 },
+  forgotText: { fontFamily: fonts.semibold, fontSize: 14, color: colors.primary },
   offline: {
     marginTop: 22, flexDirection: 'row', gap: 12, alignItems: 'flex-start', padding: 14, borderRadius: 14,
     backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line,

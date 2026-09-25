@@ -4,7 +4,7 @@ export function formatMoney(n) {
   const value = Number(n || 0);
   const [whole, cents] = Math.abs(value).toFixed(2).split('.');
   const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `${value < 0 ? '−' : ''}$${grouped}.${cents}`;
+  return `${value < 0 ? '−' : ''}₦${grouped}.${cents}`;
 }
 
 export function formatNumber(n) {

@@ -3,8 +3,12 @@ import { View, StatusBar } from 'react-native';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import * as Linking from 'expo-linking';
 import { useAuth } from '../context/AuthContext';
 import LoginScreen from '../screens/LoginScreen';
+import SetPasswordScreen from '../screens/SetPasswordScreen';
+import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
+import AdminCompaniesScreen from '../screens/AdminCompaniesScreen';
 import InventoryScreen from '../screens/InventoryScreen';
 import AddItemScreen from '../screens/AddItemScreen';
 import StockTransactionScreen from '../screens/StockTransactionScreen';
@@ -23,6 +27,13 @@ import { colors } from '../theme';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
+
+// Invite and password-reset emails open beams://set-password?token=… (via the API's /invite
+// page), which lands on the SetPassword screen with the token as a route param.
+const linking = {
+  prefixes: [Linking.createURL('/'), 'beams://'],
+  config: { screens: { SetPassword: 'set-password' } },
+};
 
 const navTheme = { ...DefaultTheme, colors: { ...DefaultTheme.colors, background: colors.ground, primary: colors.primary } };
 
@@ -52,22 +63,27 @@ function HomeTabs() {
 }
 
 export default function RootNavigator() {
-  const { user, loading, isMainCompany } = useAuth();
+  const { user, loading, isMainCompany, isSuperAdmin, allowSubCompanies } = useAuth();
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || isSuperAdmin) return;
     const stop = startConnectivityWatcher(user.id);
     return stop;
-  }, [user]);
+  }, [user, isSuperAdmin]);
 
   if (loading) return <SplashView />;
 
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer theme={navTheme} linking={linking}>
       <StatusBar barStyle="dark-content" />
       <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.ground } }}>
         {!user ? (
-          <Stack.Screen name="Login" component={LoginScreen} />
+          <>
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+          </>
+        ) : isSuperAdmin ? (
+          <Stack.Screen name="AdminCompanies" component={AdminCompaniesScreen} />
         ) : (
           <>
             <Stack.Screen name="Home" component={HomeTabs} />
@@ -81,8 +97,12 @@ export default function RootNavigator() {
             {isMainCompany && (
               <>
                 <Stack.Screen name="Alerts" component={AlertsScreen} />
-                <Stack.Screen name="ManageSubCompanies" component={ManageSubCompaniesScreen} />
-                <Stack.Screen name="CompareSubCompanies" component={CompareSubCompaniesScreen} />
+                {allowSubCompanies && (
+                  <>
+                    <Stack.Screen name="ManageSubCompanies" component={ManageSubCompaniesScreen} />
+                    <Stack.Screen name="CompareSubCompanies" component={CompareSubCompaniesScreen} />
+                  </>
+                )}
                 {/* RPT-06: read-only drill-down into one Sub Company, reusing the same screens. */}
                 <Stack.Screen name="CompanyInventory" component={InventoryScreen} options={{ animation: 'slide_from_right' }} />
                 <Stack.Screen name="CompanyReports" component={ReportsScreen} options={{ animation: 'fade' }} />
@@ -91,6 +111,9 @@ export default function RootNavigator() {
             )}
           </>
         )}
+        {/* Registered in every state so an invite link always lands somewhere; the screen asks a
+            signed-in user to log out first. */}
+        <Stack.Screen name="SetPassword" component={SetPasswordScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

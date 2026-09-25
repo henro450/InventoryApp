@@ -2,10 +2,16 @@
 
 ## Getting started
 
-**If your company is new**, use "Register a Company" on the login screen — this creates your
-company and your own login in one step. You don't need anyone to invite you, and you don't
-need to link any other company to fully use the app; a standalone company works exactly the
-same as one with linked Sub Companies.
+**If your company is new**, the platform administrator (SuperAdmin) registers it with your
+email address. You'll get an email saying you've been registered, with a **Set your password**
+button. Open it on the phone where the app is installed: it opens the app on a Set password
+screen. Choose a password (at least 8 characters), then log in with your email and that
+password. The link expires after 72 hours; if it has, use **Forgot password?** on the login
+screen to get a new one. You don't need to link any other company to fully use the app; a
+standalone company works exactly the same as one with linked Sub Companies.
+
+**If you forget your password**, tap **Forgot password?** on the login screen and enter your
+email. You'll get a link (valid for 1 hour) that opens the same Set password screen.
 
 **If you already have an account**, log in with your email and password. You'll stay logged in
 even without an internet connection — the app caches your session so you can keep working
@@ -87,8 +93,10 @@ Company's audit log.
 - **Dashboard**: your own quick links, an aggregate summary across yourself + every linked Sub
   Company, and a list of your Sub Companies with drill-down links into each one's inventory,
   reports, audit log, and alerts (always read-only when viewing someone else's data).
-- **Manage Sub Companies**: create a new one, rename, deactivate, or reactivate an existing
-  one.
+- **Manage Sub Companies**: add a new one by entering its name and its admin's email (they get
+  an email with a link to set their own password; until they do, it shows **Invite pending**
+  with a **Resend invite** button), rename, deactivate, or reactivate an existing one. This is
+  only available if the SuperAdmin set your company up to have Sub Companies.
 - **Compare Companies**: a side-by-side table of item count, low-stock count, sales, purchase
   cost, and margin across every company you can see, including your own.
 

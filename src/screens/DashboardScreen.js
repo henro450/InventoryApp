@@ -17,7 +17,7 @@ import { colors, fonts, type } from '../theme';
 // RPT-06: Main Company dashboard. If there are no linked Sub Companies, this simply shows
 // an empty state below — a standalone company (ROLE-07) is not treated as an error state.
 export default function DashboardScreen({ navigation }) {
-  const { user, logout } = useAuth();
+  const { user, logout, allowSubCompanies } = useAuth();
   const [subCompanies, setSubCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -149,71 +149,79 @@ export default function DashboardScreen({ navigation }) {
           </View>
         )}
 
-        <SectionTitle
-          title="Sub companies"
-          right={
-            <View style={{ flexDirection: 'row' }}>
-              <Pressable accessibilityRole="button" onPress={() => navigation.navigate('CompareSubCompanies')} style={styles.headerLink}>
-                <Text style={styles.link}>Compare</Text>
-              </Pressable>
-              <Pressable accessibilityRole="button" onPress={() => navigation.navigate('ManageSubCompanies')} style={styles.headerLink}>
-                <Text style={styles.link}>Manage</Text>
-              </Pressable>
-            </View>
-          }
-        />
-
-        {subCompanies.length === 0 ? (
-          <ListCard>
-            <EmptyState
-              icon="building"
-              title="No Sub Companies linked yet"
-              body="You're using this app as a standalone company. Everything works the same whether or not you ever link a Sub Company."
+        {/* A company the SuperAdmin set up without Sub Companies doesn't see this section at all;
+            if the option is turned off later, existing Sub Companies stay viewable. */}
+        {(allowSubCompanies || subCompanies.length > 0) && (
+          <>
+            <SectionTitle
+              title="Sub companies"
+              right={
+                allowSubCompanies && (
+                  <View style={{ flexDirection: 'row' }}>
+                    <Pressable accessibilityRole="button" onPress={() => navigation.navigate('CompareSubCompanies')} style={styles.headerLink}>
+                      <Text style={styles.link}>Compare</Text>
+                    </Pressable>
+                    <Pressable accessibilityRole="button" onPress={() => navigation.navigate('ManageSubCompanies')} style={styles.headerLink}>
+                      <Text style={styles.link}>Manage</Text>
+                    </Pressable>
+                  </View>
+                )
+              }
             />
-          </ListCard>
-        ) : (
-          <ListCard style={{ marginTop: -8 }}>
-            {subCompanies.map((c, i) => {
-              const stats = statsById.get(String(c.id));
-              return (
-                <View key={String(c.id)}>
-                  {i > 0 && <Divider />}
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityHint="Opens a read-only view of this company"
-                    onPress={() => navigation.navigate('CompanyInventory', { companyId: c.id, companyName: c.name })}
-                    style={({ pressed }) => [styles.subRow, pressed && { backgroundColor: colors.surfaceMuted }]}
-                  >
-                    <LetterTile label={c.name} muted={!c.isActive} />
-                    <View style={{ flex: 1, gap: 3 }}>
-                      <Text style={[styles.subName, !c.isActive && { color: colors.ink2 }]} numberOfLines={1}>
-                        {c.name}
-                      </Text>
-                      {c.isActive ? (
-                        <Text style={type.small} numberOfLines={1}>
-                          {stats ? `${plural(stats.itemCount, 'item')} · ` : ''}
-                          {stats ? (
-                            <Text style={[type.small, stats.lowStockCount > 0 && styles.lowText]}>{stats.lowStockCount} low stock</Text>
+
+            {subCompanies.length === 0 ? (
+              <ListCard>
+                <EmptyState
+                  icon="building"
+                  title="No Sub Companies linked yet"
+                  body="You're using this app as a standalone company. Everything works the same whether or not you ever link a Sub Company."
+                />
+              </ListCard>
+            ) : (
+              <ListCard style={{ marginTop: -8 }}>
+                {subCompanies.map((c, i) => {
+                  const stats = statsById.get(String(c.id));
+                  return (
+                    <View key={String(c.id)}>
+                      {i > 0 && <Divider />}
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityHint="Opens a read-only view of this company"
+                        onPress={() => navigation.navigate('CompanyInventory', { companyId: c.id, companyName: c.name })}
+                        style={({ pressed }) => [styles.subRow, pressed && { backgroundColor: colors.surfaceMuted }]}
+                      >
+                        <LetterTile label={c.name} muted={!c.isActive} />
+                        <View style={{ flex: 1, gap: 3 }}>
+                          <Text style={[styles.subName, !c.isActive && { color: colors.ink2 }]} numberOfLines={1}>
+                            {c.name}
+                          </Text>
+                          {c.isActive ? (
+                            <Text style={type.small} numberOfLines={1}>
+                              {stats ? `${plural(stats.itemCount, 'item')} · ` : ''}
+                              {stats ? (
+                                <Text style={[type.small, stats.lowStockCount > 0 && styles.lowText]}>{stats.lowStockCount} low stock</Text>
+                              ) : (
+                                'Active'
+                              )}
+                            </Text>
                           ) : (
-                            'Active'
+                            <Text style={type.small}>Deactivated</Text>
                           )}
-                        </Text>
-                      ) : (
-                        <Text style={type.small}>Deactivated</Text>
-                      )}
+                        </View>
+                        {stats && (
+                          <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                            <Text style={[styles.subMargin, stats.margin < 0 && { color: colors.danger }]}>{formatMoney(stats.margin)}</Text>
+                            <Text style={type.caption}>margin</Text>
+                          </View>
+                        )}
+                        <Icon name="chev" size={18} color={colors.chevron} />
+                      </Pressable>
                     </View>
-                    {stats && (
-                      <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                        <Text style={[styles.subMargin, stats.margin < 0 && { color: colors.danger }]}>{formatMoney(stats.margin)}</Text>
-                        <Text style={type.caption}>margin</Text>
-                      </View>
-                    )}
-                    <Icon name="chev" size={18} color={colors.chevron} />
-                  </Pressable>
-                </View>
-              );
-            })}
-          </ListCard>
+                  );
+                })}
+              </ListCard>
+            )}
+          </>
         )}
       </ScrollView>
     </Screen>

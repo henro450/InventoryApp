@@ -45,7 +45,16 @@ async function request(path, { method = 'GET', body, auth = true } = {}) {
 
 export const api = {
   login: (email, password) => request('/auth/login', { method: 'POST', body: { email, password }, auth: false }),
-  registerCompany: (payload) => request('/auth/register-company', { method: 'POST', body: payload, auth: false }),
+  // Invite / password-reset links (the token arrives via the beams://set-password deep link).
+  getPasswordToken: (token) => request(`/auth/password-token?token=${encodeURIComponent(token)}`, { auth: false }),
+  setPassword: (payload) => request('/auth/set-password', { method: 'POST', body: payload, auth: false }),
+  forgotPassword: (email) => request('/auth/forgot-password', { method: 'POST', body: { email }, auth: false }),
+
+  // SuperAdmin: profiling Main Companies.
+  adminListCompanies: () => request('/admin/companies'),
+  adminCreateCompany: (payload) => request('/admin/companies', { method: 'POST', body: payload }),
+  adminUpdateCompany: (id, payload) => request(`/admin/companies/${id}`, { method: 'PATCH', body: payload }),
+  adminResendInvite: (id) => request(`/admin/companies/${id}/resend-invite`, { method: 'POST' }),
 
   getMyCompany: () => request('/companies/mine'),
   createSubCompany: (payload) => request('/companies/sub-companies', { method: 'POST', body: payload }),
@@ -53,6 +62,7 @@ export const api = {
   updateAlertSettings: (payload) => request('/companies/mine', { method: 'PATCH', body: payload }),
   deactivateSubCompany: (id) => request(`/companies/sub-companies/${id}/deactivate`, { method: 'PATCH' }),
   reactivateSubCompany: (id) => request(`/companies/sub-companies/${id}/reactivate`, { method: 'PATCH' }),
+  resendSubCompanyInvite: (id) => request(`/companies/sub-companies/${id}/resend-invite`, { method: 'POST' }),
 
   getItems: (companyId) => request(`/items${companyId ? `?companyId=${companyId}` : ''}`),
   createItem: (payload) => request('/items', { method: 'POST', body: payload }),

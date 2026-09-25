@@ -8,7 +8,7 @@ import {
 } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
-const EMPTY_FORM = { companyName: '', adminName: '', email: '', password: '' };
+const EMPTY_FORM = { companyName: '', email: '' };
 
 export default function ManageSubCompaniesScreen() {
   const [subCompanies, setSubCompanies] = useState([]);
@@ -26,6 +26,7 @@ export default function ManageSubCompaniesScreen() {
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   const [togglingId, setTogglingId] = useState(null);
+  const [resendingId, setResendingId] = useState(null);
 
   const load = useCallback(() => {
     setError(null);
@@ -49,17 +50,23 @@ export default function ManageSubCompaniesScreen() {
   }
 
   async function handleCreate() {
-    const { companyName, adminName, email, password } = createForm;
-    if (!companyName || !adminName || !email || !password) {
-      Alert.alert('Missing info', 'Company name, admin name, email, and password are all required.');
+    const companyName = createForm.companyName.trim();
+    const email = createForm.email.trim();
+    if (!companyName || !email) {
+      Alert.alert('Missing info', 'Company name and admin email are both required.');
       return;
     }
     setCreateSubmitting(true);
     try {
-      await api.createSubCompany(createForm);
+      const { emailSent } = await api.createSubCompany({ companyName, email });
       setCreateForm(EMPTY_FORM);
       setCreating(false);
       load();
+      if (emailSent) {
+        Alert.alert('Invite sent', `We've emailed ${email} a link to set their password. They can log in once that's done.`);
+      } else {
+        Alert.alert('Company created, email not sent', `${companyName} was created, but the invite email to ${email} couldn't be sent. Use "Resend invite" to try again.`);
+      }
     } catch (err) {
       Alert.alert('Could not create Sub Company', err.message);
     } finally {
@@ -102,6 +109,20 @@ export default function ManageSubCompaniesScreen() {
       Alert.alert('Could not update Sub Company', err.message);
     } finally {
       setTogglingId(null);
+    }
+  }
+
+  async function handleResend(company) {
+    setResendingId(company.id);
+    try {
+      const { email, emailSent } = await api.resendSubCompanyInvite(company.id);
+      if (emailSent) Alert.alert('Invite sent', `A new link has been emailed to ${email}. Earlier links no longer work.`);
+      else Alert.alert('Email not sent', "The invite couldn't be sent. Please try again in a moment.");
+      load();
+    } catch (err) {
+      Alert.alert('Could not resend invite', err.message);
+    } finally {
+      setResendingId(null);
     }
   }
 
@@ -181,8 +202,22 @@ export default function ManageSubCompaniesScreen() {
               <Text style={[styles.name, !item.isActive && { color: colors.ink2 }]} numberOfLines={2}>
                 {item.name}
               </Text>
-              {item.isActive ? <Pill kind="ok" label="Active" /> : <Pill kind="muted" label="Deactivated" />}
+              {!item.isActive ? (
+                <Pill kind="muted" label="Deactivated" />
+              ) : item.inviteStatus === 'pending' ? (
+                <Pill kind="warn" label="Invite pending" />
+              ) : (
+                <Pill kind="ok" label="Active" />
+              )}
             </View>
+            {item.isActive && item.inviteStatus === 'pending' && (
+              <View style={styles.pendingRow}>
+                <Text style={[type.small, { flex: 1 }]} numberOfLines={2}>
+                  Waiting for {item.adminEmail || 'the admin'} to set a password.
+                </Text>
+                <Button title="Resend invite" variant="ghost" icon="mail" height={40} loading={resendingId === item.id} onPress={() => handleResend(item)} />
+              </View>
+            )}
             <View style={styles.actions}>
               <Button title="Rename" variant="secondary" icon="pencil" height={44} style={{ flex: 1 }} onPress={() => openEdit(item)} />
               <Button
@@ -202,16 +237,15 @@ export default function ManageSubCompaniesScreen() {
         visible={creating}
         onClose={() => setCreating(false)}
         title="Add sub company"
-        description="Creates the company and its first admin login. You can rename or deactivate it later."
+        description="We'll email the admin a link to set their password. You can rename or deactivate the company later."
         footer={
           <>
             <Button title="Cancel" variant="secondary" style={{ flex: 1 }} onPress={() => setCreating(false)} />
-            <Button title="Create company" style={{ flex: 1 }} onPress={handleCreate} loading={createSubmitting} />
+            <Button title="Send invite" style={{ flex: 1 }} onPress={handleCreate} loading={createSubmitting} />
           </>
         }
       >
         <Field label="Company name" leadingIcon="building" placeholder="e.g. Lekki Warehouse" value={createForm.companyName} onChangeText={setField('companyName')} />
-        <Field label="Admin name" leadingIcon="user" placeholder="Full name" value={createForm.adminName} onChangeText={setField('adminName')} />
         <Field
           label="Admin email"
           leadingIcon="mail"
@@ -221,15 +255,7 @@ export default function ManageSubCompaniesScreen() {
           keyboardType="email-address"
           value={createForm.email}
           onChangeText={setField('email')}
-        />
-        <Field
-          label="Temporary password"
-          leadingIcon="lock"
-          placeholder="Admin password"
-          secureTextEntry
-          value={createForm.password}
-          onChangeText={setField('password')}
-          hint="Share it with the admin securely. They sign in with this email and password."
+          hint="They'll get an email with a link that opens the app to set their password."
         />
       </Sheet>
 
@@ -255,4 +281,5 @@ const styles = StyleSheet.create({
   topRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   name: { flex: 1, fontFamily: fonts.semibold, fontSize: 16 },
   actions: { flexDirection: 'row', gap: 10 },
+  pendingRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 });
