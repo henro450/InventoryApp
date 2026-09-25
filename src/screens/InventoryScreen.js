@@ -1,24 +1,43 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, Alert } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { View, FlatList, Pressable, StyleSheet, RefreshControl, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import Swipeable from 'react-native-gesture-handler/Swipeable';
+import 'react-native-get-random-values';
+import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '../context/AuthContext';
 import { getLocalItems, getSyncStatusSummary, saveLocalItem, deleteLocalItem, getLastSyncedAt } from '../db/localDb';
 import { runSync } from '../sync/syncEngine';
 import { isLowStock } from '../utils/inventory';
 import { exportCsv, pickAndParseCsv } from '../utils/csvExport';
-import 'react-native-get-random-values';
-import { v4 as uuidv4 } from 'uuid';
+import { startScanToFind } from '../utils/scan';
+import { formatNumber, formatTime, lastSyncedLabel, plural, timeAgo } from '../utils/format';
+import Icon from '../components/Icon';
+import {
+  Text, Screen, LargeHeader, NavHeader, IconButton, AccountButton, SearchField, Chip, Pill, Banner, EmptyState,
+  CompanySwitcher, ReadOnlyBanner,
+} from '../components/ui';
+import { colors, fonts, type, shadow } from '../theme';
+
+const CATALOG_COLUMNS = [
+  { key: 'sku', label: 'SKU' },
+  { key: 'name', label: 'Name' },
+  { key: 'category', label: 'Category' },
+  { key: 'unit', label: 'Unit' },
+  { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
+];
 
 // SYNC-06: visible "All synced" / "X pending" indicator so the user always knows whether
-// their data has reached the cloud.
+// their data has reached the cloud. The same screen doubles as the Main Company's read-only
+// view of a Sub Company when opened with route.params.companyId.
 export default function InventoryScreen({ navigation, route }) {
-  const { user } = useAuth();
+  const { user, isMainCompany, logout } = useAuth();
   const viewingCompanyId = route?.params?.companyId || user.companyId;
   const isOwnCompany = viewingCompanyId === user.companyId;
   const [items, setItems] = useState([]);
   const [syncSummary, setSyncSummary] = useState({ total: 0, pending: 0, failed: 0, conflict: 0 });
   const [refreshing, setRefreshing] = useState(false);
-  const [showLowStockOnly, setShowLowStockOnly] = useState(false);
+  const [filter, setFilter] = useState('all');
+  const [query, setQuery] = useState('');
 
   const loadLocal = useCallback(() => {
     setItems(getLocalItems(viewingCompanyId));
@@ -43,40 +62,31 @@ export default function InventoryScreen({ navigation, route }) {
   }
 
   function handleDeactivate(item) {
-    Alert.alert(
-      'Deactivate item',
-      `Deactivate "${item.name}"? It will no longer appear in inventory.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Deactivate',
-          style: 'destructive',
-          onPress: () => {
-            if (!item.id) {
-              deleteLocalItem(item.localId);
-            } else {
-              saveLocalItem({ ...item, isActive: 0, syncStatus: 'pending', userId: user.id });
-              runSync(user.id);
-            }
-            loadLocal();
-          },
+    Alert.alert('Deactivate item', `Deactivate "${item.name}"? It will no longer appear in inventory.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Deactivate',
+        style: 'destructive',
+        onPress: () => {
+          if (!item.id) {
+            deleteLocalItem(item.localId);
+          } else {
+            saveLocalItem({ ...item, isActive: 0, syncStatus: 'pending', userId: user.id });
+            runSync(user.id);
+          }
+          loadLocal();
         },
-      ]
-    );
+      },
+    ]);
   }
 
-  function handleScanToFind() {
-    navigation.navigate('ScanBarcode', {
-      onScanned: (code) => {
-        const normalized = code.trim().toLowerCase();
-        const match = items.find((i) => i.sku.trim().toLowerCase() === normalized);
-        if (!match) {
-          Alert.alert('Not found', `No item in this list has SKU "${code}".`);
-          return;
-        }
-        navigation.navigate('StockTransaction', { item: match });
-      },
-    });
+  function handleMore(item) {
+    Alert.alert(item.name, `${item.sku}${item.category ? ` · ${item.category}` : ''}`, [
+      { text: 'Record transaction', onPress: () => navigation.navigate('StockTransaction', { item }) },
+      { text: 'Edit item', onPress: () => handleEdit(item) },
+      { text: 'Deactivate', style: 'destructive', onPress: () => handleDeactivate(item) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   }
 
   async function handleExportCatalog() {
@@ -85,13 +95,7 @@ export default function InventoryScreen({ navigation, route }) {
       return;
     }
     try {
-      await exportCsv('item-catalog.csv', items, [
-        { key: 'sku', label: 'SKU' },
-        { key: 'name', label: 'Name' },
-        { key: 'category', label: 'Category' },
-        { key: 'unit', label: 'Unit' },
-        { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
-      ]);
+      await exportCsv('item-catalog.csv', items, CATALOG_COLUMNS);
     } catch (err) {
       Alert.alert('Export failed', err.message);
     }
@@ -141,146 +145,248 @@ export default function InventoryScreen({ navigation, route }) {
     Alert.alert('Import complete', `Imported ${imported} item${imported === 1 ? '' : 's'}${skipped > 0 ? `, skipped ${skipped} row${skipped === 1 ? '' : 's'} missing SKU/Name` : ''}.`);
   }
 
-  const visibleItems = showLowStockOnly ? items.filter(isLowStock) : items;
+  const lowCount = useMemo(() => items.filter(isLowStock).length, [items]);
+  const reviewCount = useMemo(() => items.filter((i) => i.syncStatus === 'conflict').length, [items]);
+
+  const visibleItems = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return items.filter((i) => {
+      if (filter === 'low' && !isLowStock(i)) return false;
+      if (filter === 'review' && i.syncStatus !== 'conflict') return false;
+      if (!q) return true;
+      return i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q) || (i.category || '').toLowerCase().includes(q);
+    });
+  }, [items, filter, query]);
+
   const lastSynced = getLastSyncedAt(user.id);
-  const lastSyncedLabel = lastSynced
-    ? `Data last synced: ${new Date(lastSynced).toLocaleString()}`
-    : 'Not yet synced';
+  const companyParams = { companyId: viewingCompanyId, companyName: route?.params?.companyName };
+
+  const syncParts = [];
+  if (syncSummary.conflict > 0) syncParts.push(`${syncSummary.conflict} need${syncSummary.conflict === 1 ? 's' : ''} review`);
+  if (syncSummary.failed > 0) syncParts.push(`${syncSummary.failed} retrying`);
+  syncParts.push(lastSynced ? `last synced ${formatTime(lastSynced)}` : 'not yet synced');
+
+  const header = isOwnCompany ? (
+    <LargeHeader
+      eyebrow={isMainCompany ? 'Main company' : 'Sub company'}
+      title="Inventory"
+      right={
+        <>
+          <IconButton icon="upload" label="Import catalog from CSV" onPress={handleImportCatalog} />
+          <IconButton icon="download" label="Export catalog as CSV" onPress={handleExportCatalog} />
+          {!isMainCompany && <AccountButton user={user} onLogout={logout} />}
+        </>
+      }
+    />
+  ) : (
+    <>
+      <NavHeader
+        title={route?.params?.companyName || 'Sub Company'}
+        right={<IconButton icon="download" label="Export catalog as CSV" onPress={handleExportCatalog} />}
+      />
+      <View style={styles.readOnlyWrap}>
+        <ReadOnlyBanner subtitle={lastSyncedLabel(lastSynced)} />
+        <CompanySwitcher active="inventory" params={companyParams} />
+      </View>
+    </>
+  );
+
+  const listHeader = (
+    <View style={styles.listHeader}>
+      <View style={styles.searchRow}>
+        <SearchField value={query} onChangeText={setQuery} placeholder="Search name or SKU" />
+        {isOwnCompany && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Scan to find an item"
+            onPress={() => startScanToFind(navigation, user.companyId)}
+            style={({ pressed }) => [styles.scanButton, pressed && { opacity: 0.8 }]}
+          >
+            <Icon name="scan" size={22} color="#FFFFFF" strokeWidth={1.9} />
+          </Pressable>
+        )}
+      </View>
+      <View style={styles.chips}>
+        <Chip label="All" count={formatNumber(items.length)} active={filter === 'all'} onPress={() => setFilter('all')} />
+        <Chip label="Low stock" count={lowCount} active={filter === 'low'} onPress={() => setFilter('low')} />
+        {isOwnCompany && reviewCount > 0 && (
+          <Chip label="Needs review" count={reviewCount} active={filter === 'review'} onPress={() => setFilter('review')} />
+        )}
+      </View>
+      {isOwnCompany &&
+        (syncSummary.total > 0 ? (
+          <Banner
+            kind="warn"
+            icon="sync"
+            title={`${plural(syncSummary.total, 'change')} waiting to sync`}
+            subtitle={syncParts.join(' · ')}
+            actionLabel="Sync now"
+            actionLoading={refreshing}
+            onAction={handleRefresh}
+          />
+        ) : (
+          <Pill kind="ok" icon="check" label={lastSynced ? `All synced · ${timeAgo(lastSynced)}` : 'Not yet synced'} />
+        ))}
+    </View>
+  );
 
   return (
-    <View style={styles.container}>
-      {!isOwnCompany && (
-        <View style={styles.readOnlyBanner}>
-          <Text style={styles.readOnlyText}>Viewing {route?.params?.companyName || 'Sub Company'} — read-only</Text>
-          <Text style={styles.lastSyncedText}>{lastSyncedLabel}</Text>
-        </View>
-      )}
-
-      <View style={styles.syncBar}>
-        <Text style={styles.syncText}>
-          {syncSummary.total > 0 ? `${syncSummary.total} unsynced change(s)` : 'All synced'}
-          {syncSummary.conflict > 0 ? ` · ${syncSummary.conflict} need review` : ''}
-          {syncSummary.failed > 0 ? ` · ${syncSummary.failed} retrying` : ''}
-        </Text>
-        <TouchableOpacity
-          style={[styles.filterChip, showLowStockOnly && styles.filterChipActive]}
-          onPress={() => setShowLowStockOnly((v) => !v)}
-        >
-          <Text style={[styles.filterChipText, showLowStockOnly && styles.filterChipTextActive]}>
-            Low stock only
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.linkRow}>
-        <TouchableOpacity onPress={() => navigation.navigate('Reports', route?.params)}>
-          <Text style={styles.linkText}>Reports</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => navigation.navigate('AuditLog', route?.params)}>
-          <Text style={styles.linkText}>Audit Log</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => navigation.navigate('Alerts', route?.params)}>
-          <Text style={styles.linkText}>Alerts</Text>
-        </TouchableOpacity>
-        {isOwnCompany && (
-          <TouchableOpacity onPress={handleScanToFind}>
-            <Text style={styles.linkText}>Scan Item</Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity onPress={handleExportCatalog}>
-          <Text style={styles.linkText}>Export Catalog</Text>
-        </TouchableOpacity>
-        {isOwnCompany && (
-          <TouchableOpacity onPress={handleImportCatalog}>
-            <Text style={styles.linkText}>Import Catalog</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
+    <Screen>
+      {header}
       <FlatList
         data={visibleItems}
         keyExtractor={(item) => item.localId}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
-        contentContainerStyle={{ padding: 16 }}
-        ListEmptyComponent={<Text style={styles.empty}>No items yet. Add one to get started.</Text>}
+        ListHeaderComponent={listHeader}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
+        contentContainerStyle={[styles.list, isOwnCompany && { paddingBottom: 96 }]}
+        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+        keyboardShouldPersistTaps="handled"
+        ListEmptyComponent={
+          items.length === 0 ? (
+            <EmptyState
+              title="No items yet"
+              body={isOwnCompany ? 'Add your first item, scan one, or import a CSV catalog.' : 'This company has no items yet.'}
+            />
+          ) : (
+            <EmptyState icon="search" title="Nothing matches" body="Try a different search or filter." />
+          )
+        }
         renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.card}
-            disabled={!isOwnCompany}
+          <ItemRow
+            item={item}
+            editable={isOwnCompany}
             onPress={() => navigation.navigate('StockTransaction', { item })}
-          >
-            <View style={{ flex: 1 }}>
-              <Text style={styles.itemName}>{item.name}</Text>
-              <Text style={styles.itemMeta}>{item.sku} · {item.category || 'Uncategorized'}</Text>
-              {item.syncStatus === 'conflict' && (
-                <Text style={styles.conflictText}>Changed elsewhere — edit or deactivate again to resolve</Text>
-              )}
-              {isOwnCompany && (
-                <View style={styles.itemActions}>
-                  <TouchableOpacity onPress={() => handleEdit(item)}>
-                    <Text style={styles.actionText}>Edit</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => handleDeactivate(item)}>
-                    <Text style={[styles.actionText, styles.actionTextDanger]}>Deactivate</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={[styles.qty, isLowStock(item) && styles.qtyLow]}>
-                {item.quantityOnHand} {item.unit}
-              </Text>
-              {isLowStock(item) && <Text style={styles.lowLabel}>Low stock</Text>}
-            </View>
-          </TouchableOpacity>
+            onEdit={() => handleEdit(item)}
+            onDeactivate={() => handleDeactivate(item)}
+            onMore={() => handleMore(item)}
+          />
         )}
       />
-
       {isOwnCompany && (
-        <TouchableOpacity style={styles.fab} onPress={() => navigation.navigate('AddItem')}>
-          <Text style={styles.fabText}>+ Add Item</Text>
-        </TouchableOpacity>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => navigation.navigate('AddItem')}
+          style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85 }]}
+        >
+          <Icon name="plus" size={20} color="#FFFFFF" strokeWidth={2.2} />
+          <Text style={styles.fabText}>Add item</Text>
+        </Pressable>
       )}
-    </View>
+    </Screen>
+  );
+}
+
+function ItemRow({ item, editable, onPress, onEdit, onDeactivate, onMore }) {
+  const swipeRef = useRef(null);
+  const low = isLowStock(item);
+  const conflict = item.syncStatus === 'conflict';
+  const waiting = item.syncStatus === 'pending' || item.syncStatus === 'failed';
+
+  const body = (
+    <Pressable
+      accessibilityRole={editable ? 'button' : undefined}
+      accessibilityHint={editable ? 'Records a stock transaction' : undefined}
+      disabled={!editable}
+      onPress={onPress}
+      style={({ pressed }) => [styles.card, conflict && { borderColor: colors.warnLine }, pressed && { backgroundColor: colors.surfaceMuted }]}
+    >
+      <View style={{ flex: 1, gap: 5 }}>
+        <Text style={styles.itemName} numberOfLines={2}>
+          {item.name}
+        </Text>
+        <Text style={type.caption} numberOfLines={1}>
+          <Text style={type.mono}>{item.sku}</Text> · {item.category || 'Uncategorized'}
+        </Text>
+        {low && <Pill kind="danger" label={`Low stock · alert at ${item.lowStockThreshold}`} />}
+        {editable && conflict && (
+          <View style={styles.statusLine}>
+            <Icon name="alert" size={15} color={colors.warn} strokeWidth={2} />
+            <Text style={[styles.statusText, { color: colors.warn }]}>Changed on another device. Edit to resolve.</Text>
+          </View>
+        )}
+        {editable && waiting && (
+          <View style={styles.statusLine}>
+            <Icon name="clock" size={15} color={colors.ink3} strokeWidth={2} />
+            <Text style={styles.statusText}>
+              {item.syncStatus === 'failed' ? 'Sync failed · will retry' : 'Saved on this device · waiting to sync'}
+            </Text>
+          </View>
+        )}
+      </View>
+      <View style={styles.qtyCol}>
+        <Text style={[styles.qty, low && { color: colors.danger }]}>{formatNumber(item.quantityOnHand)}</Text>
+        <Text style={type.caption}>{item.unit}</Text>
+      </View>
+      {editable && <IconButton icon="more" label={`More actions for ${item.name}`} variant="ghost" size={36} onPress={onMore} />}
+    </Pressable>
+  );
+
+  if (!editable) return body;
+
+  return (
+    <Swipeable
+      ref={swipeRef}
+      friction={2}
+      rightThreshold={40}
+      overshootRight={false}
+      containerStyle={styles.swipeContainer}
+      renderRightActions={() => (
+        <View style={styles.swipeActions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Edit ${item.name}`}
+            style={[styles.swipeAction, { backgroundColor: colors.ink }]}
+            onPress={() => {
+              swipeRef.current?.close();
+              onEdit();
+            }}
+          >
+            <Icon name="pencil" size={18} color="#FFFFFF" />
+            <Text style={styles.swipeText}>Edit</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Deactivate ${item.name}`}
+            style={[styles.swipeAction, { backgroundColor: colors.danger, width: 96 }]}
+            onPress={() => {
+              swipeRef.current?.close();
+              onDeactivate();
+            }}
+          >
+            <Icon name="trash" size={18} color="#FFFFFF" />
+            <Text style={styles.swipeText}>Deactivate</Text>
+          </Pressable>
+        </View>
+      )}
+    >
+      {body}
+    </Swipeable>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  readOnlyBanner: { backgroundColor: '#fff4e0', padding: 8, alignItems: 'center' },
-  readOnlyText: { fontSize: 12, color: '#8a5a00', fontWeight: '600' },
-  lastSyncedText: { fontSize: 11, color: '#8a5a00', marginTop: 2 },
-  syncBar: {
-    padding: 10, backgroundColor: '#f4f6fb', alignItems: 'center',
-    flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16,
-  },
-  syncText: { fontSize: 13, color: '#555' },
-  filterChip: { backgroundColor: '#eef2fd', borderRadius: 14, paddingVertical: 5, paddingHorizontal: 12 },
-  filterChipActive: { backgroundColor: '#2f6fed' },
-  filterChipText: { fontSize: 12, color: '#2f6fed', fontWeight: '600' },
-  filterChipTextActive: { color: '#fff' },
-  linkRow: {
-    flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 16, paddingVertical: 10,
-    paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
-  },
-  linkText: { color: '#2f6fed', fontWeight: '600', fontSize: 13 },
-  empty: { textAlign: 'center', color: '#999', marginTop: 40 },
+  readOnlyWrap: { paddingHorizontal: 20, paddingTop: 2, gap: 14 },
+  listHeader: { gap: 14, paddingBottom: 14 },
+  searchRow: { flexDirection: 'row', gap: 10 },
+  scanButton: { width: 48, height: 48, borderRadius: 14, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
+  chips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  list: { paddingHorizontal: 20, paddingTop: 2, paddingBottom: 32 },
   card: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    padding: 14, borderWidth: 1, borderColor: '#eee', borderRadius: 10, marginBottom: 10,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 18,
+    paddingVertical: 14, paddingLeft: 16, paddingRight: 8, flexDirection: 'row', alignItems: 'center', gap: 12,
   },
-  itemName: { fontSize: 16, fontWeight: '600' },
-  itemMeta: { fontSize: 13, color: '#888', marginTop: 2 },
-  conflictText: { fontSize: 11, color: '#b35c00', marginTop: 4 },
-  itemActions: { flexDirection: 'row', gap: 16, marginTop: 6 },
-  actionText: { color: '#2f6fed', fontWeight: '600', fontSize: 12 },
-  actionTextDanger: { color: '#d9534f' },
-  qty: { fontSize: 16, fontWeight: '600' },
-  qtyLow: { color: '#d9534f' },
-  lowLabel: { fontSize: 11, color: '#d9534f' },
+  itemName: { fontFamily: fonts.semibold, fontSize: 15 },
+  statusLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statusText: { flex: 1, fontSize: 12, color: colors.ink3, fontFamily: fonts.medium },
+  qtyCol: { alignItems: 'flex-end', gap: 1, paddingRight: 4 },
+  qty: { fontFamily: fonts.display, fontSize: 24, lineHeight: 28, letterSpacing: -0.5, fontVariant: ['tabular-nums'] },
+  swipeContainer: { borderRadius: 18 },
+  swipeActions: { flexDirection: 'row', marginLeft: 10, borderRadius: 18, overflow: 'hidden' },
+  swipeAction: { width: 80, alignItems: 'center', justifyContent: 'center', gap: 4 },
+  swipeText: { color: '#FFFFFF', fontFamily: fonts.semibold, fontSize: 12 },
   fab: {
-    position: 'absolute', bottom: 24, right: 24, backgroundColor: '#2f6fed',
-    paddingVertical: 12, paddingHorizontal: 18, borderRadius: 30, elevation: 3,
+    position: 'absolute', right: 20, bottom: 18, height: 54, paddingLeft: 16, paddingRight: 20, borderRadius: 27,
+    backgroundColor: colors.primary, flexDirection: 'row', alignItems: 'center', gap: 8, ...shadow.primary,
   },
-  fabText: { color: '#fff', fontWeight: '600' },
+  fabText: { color: '#FFFFFF', fontFamily: fonts.semibold, fontSize: 15 },
 });

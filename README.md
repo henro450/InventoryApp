@@ -35,7 +35,11 @@ src/
   context/AuthContext.js Login/logout, cached session for offline use (AUTH-02)
   db/localDb.js          SQLite data, transactional outbox, per-user cursors
   sync/syncEngine.js     Idempotent upload + ordered cursor download
-  navigation/RootNavigator.js  Role-based screen routing (single app binary — ROLE-06)
+  navigation/RootNavigator.js  Role-based tabs + stack routing (single app binary — ROLE-06)
+  theme/index.js         Colours, fonts, type scale — the single source of the app's look
+  components/ui.js       Shared UI kit (headers, buttons, fields, chips, cards, sheets)
+  components/Icon.js     Stroke icon set (react-native-svg)
+  components/TabBar.js   Bottom tab bar with the centre Scan button
   screens/
     LoginScreen.js
     InventoryScreen.js        List + sync status + low-stock highlighting

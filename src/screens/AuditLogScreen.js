@@ -1,10 +1,81 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, FlatList, StyleSheet, ActivityIndicator, TouchableOpacity, TextInput } from 'react-native';
+import { View, SectionList, StyleSheet, RefreshControl, ScrollView } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
 import { getLastSyncedAt } from '../db/localDb';
+import { ROLES } from '../constants/roles';
+import { formatDate, formatMoney, formatTime, lastSyncedLabel } from '../utils/format';
+import Icon from '../components/Icon';
+import {
+  Text, Screen, LargeHeader, NavHeader, IconButton, Chip, Card, Field, Button, Banner, EmptyState, Loading,
+  CompanySwitcher, ReadOnlyBanner,
+} from '../components/ui';
+import { colors, fonts, type } from '../theme';
 
 const ACTIONS = ['create', 'update', 'delete'];
+const ACTION_STYLE = {
+  create: { bg: colors.okSoft, fg: colors.ok, icon: 'plus', verb: 'created' },
+  update: { bg: colors.primarySoft, fg: colors.primary, icon: 'pencil', verb: 'updated' },
+  delete: { bg: colors.dangerSoft, fg: colors.danger, icon: 'trash', verb: 'deleted' },
+};
+// Bookkeeping fields that change on every write and would only add noise to a diff.
+const IGNORED_FIELDS = new Set(['updatedAt', 'createdAt', 'version', 'syncStatus', 'userId', 'id', 'companyId', 'localId', 'clientItemId']);
+
+function parse(json) {
+  if (!json) return null;
+  try {
+    return typeof json === 'string' ? JSON.parse(json) : json;
+  } catch {
+    return null;
+  }
+}
+
+function roleLabel(role) {
+  if (role === ROLES.MAIN) return 'Main company';
+  if (role === ROLES.SUB) return 'Sub company';
+  return role || null;
+}
+
+function humanize(key) {
+  return key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+}
+
+function show(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  return String(v);
+}
+
+// Turn a raw audit row into something readable: what it was about, and what changed.
+function describe(log) {
+  const oldV = parse(log.oldValue);
+  const newV = parse(log.newValue);
+  const snapshot = newV || oldV || {};
+  const subject = snapshot.name || snapshot.itemName || snapshot.companyName || `${humanize(log.entityType || 'Record')} #${log.entityId}`;
+
+  let detail = null;
+  if (log.action === 'update' && oldV && newV) {
+    const changes = Object.keys(newV)
+      .filter((k) => !IGNORED_FIELDS.has(k) && typeof newV[k] !== 'object' && show(oldV[k]) !== show(newV[k]))
+      .slice(0, 3)
+      .map((k) => `${humanize(k)}: ${show(oldV[k])} → ${show(newV[k])}`);
+    if (changes.length) detail = changes.join('\n');
+  } else if (log.action === 'create' && newV && newV.type && newV.quantity != null) {
+    const kind = newV.type === 'in' ? 'Stock in' : newV.type === 'out' ? 'Stock out' : 'Adjustment';
+    detail = `${kind} · ${newV.quantity}${newV.unitPrice != null && newV.type !== 'adjustment' ? ` × ${formatMoney(newV.unitPrice)}` : ''}`;
+  }
+  return { subject, detail };
+}
+
+function dayKey(iso) {
+  const d = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return 'Today';
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return formatDate(iso);
+}
 
 // AUD-03/AUD-04: read-only audit log view with filters. Sub Company sees only its own log;
 // Main Company can pass a companyId (e.g. a linked Sub Company) to view that company's log
@@ -12,27 +83,27 @@ const ACTIONS = ['create', 'update', 'delete'];
 // than a second in-screen company switcher.
 // There is intentionally no edit or delete action anywhere on this screen (AUD-02).
 export default function AuditLogScreen({ route }) {
-  const { user } = useAuth();
+  const { user, isMainCompany } = useAuth();
   const companyId = route?.params?.companyId || user.companyId;
   const companyLabel = route?.params?.companyName;
+  const isOwnCompany = companyId === user.companyId;
   const lastSynced = getLastSyncedAt(user.id);
-  const lastSyncedLabel = lastSynced
-    ? `Data last synced: ${new Date(lastSynced).toLocaleString()}`
-    : 'Not yet synced';
 
   const [baseLogs, setBaseLogs] = useState([]);
   const [displayLogs, setDisplayLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
 
   const [actionFilter, setActionFilter] = useState(null);
   const [selectedUserId, setSelectedUserId] = useState(null);
+  const [datesOpen, setDatesOpen] = useState(false);
   const [fromInput, setFromInput] = useState('');
   const [toInput, setToInput] = useState('');
+  const [appliedDates, setAppliedDates] = useState({ from: '', to: '' });
   const [dateError, setDateError] = useState(null);
 
   async function loadUnfiltered() {
-    setLoading(true);
     setError(null);
     try {
       const { logs } = await api.getAuditLogs(companyId);
@@ -42,6 +113,7 @@ export default function AuditLogScreen({ route }) {
       setSelectedUserId(null);
       setFromInput('');
       setToInput('');
+      setAppliedDates({ from: '', to: '' });
       setDateError(null);
     } catch (err) {
       setError(err.message);
@@ -53,6 +125,12 @@ export default function AuditLogScreen({ route }) {
   useEffect(() => {
     loadUnfiltered();
   }, [companyId]);
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    await loadUnfiltered();
+    setRefreshing(false);
+  }
 
   // AUD-04: derived from the initial unfiltered load only, never recomputed from the currently
   // filtered displayLogs — otherwise applying e.g. an action filter would shrink the roster to
@@ -67,7 +145,30 @@ export default function AuditLogScreen({ route }) {
     return Array.from(map, ([userId, role]) => ({ userId, role }));
   }, [baseLogs]);
 
-  async function handleApplyFilters() {
+  // Chips apply immediately; dates apply from their panel.
+  async function applyFilters({ action = actionFilter, userId = selectedUserId, from = appliedDates.from, to = appliedDates.to } = {}) {
+    try {
+      const { logs } = await api.getAuditLogs(companyId, { userId, action, from, to });
+      setDisplayLogs(logs);
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function toggleAction(a) {
+    const next = actionFilter === a ? null : a;
+    setActionFilter(next);
+    applyFilters({ action: next });
+  }
+
+  function toggleUser(userId) {
+    const next = selectedUserId === userId ? null : userId;
+    setSelectedUserId(next);
+    applyFilters({ userId: next });
+  }
+
+  function handleApplyDates() {
     if (fromInput && isNaN(Date.parse(fromInput))) {
       setDateError('Invalid "from" date — use YYYY-MM-DD');
       return;
@@ -77,143 +178,167 @@ export default function AuditLogScreen({ route }) {
       return;
     }
     setDateError(null);
-    try {
-      const { logs } = await api.getAuditLogs(companyId, {
-        userId: selectedUserId,
-        action: actionFilter,
-        from: fromInput.trim(),
-        to: toInput.trim(),
-      });
-      setDisplayLogs(logs);
-    } catch (err) {
-      setError(err.message);
+    const dates = { from: fromInput.trim(), to: toInput.trim() };
+    setAppliedDates(dates);
+    setDatesOpen(false);
+    applyFilters(dates);
+  }
+
+  function clearDates() {
+    setFromInput('');
+    setToInput('');
+    setAppliedDates({ from: '', to: '' });
+    applyFilters({ from: '', to: '' });
+  }
+
+  const sections = useMemo(() => {
+    const groups = [];
+    const index = new Map();
+    for (const log of displayLogs) {
+      const key = dayKey(log.occurredAt);
+      if (!index.has(key)) {
+        index.set(key, groups.length);
+        groups.push({ title: key, data: [] });
+      }
+      groups[index.get(key)].data.push(log);
     }
-  }
+    return groups;
+  }, [displayLogs]);
 
-  function toggleAction(a) {
-    setActionFilter((cur) => (cur === a ? null : a));
-  }
-
-  function toggleUser(userId) {
-    setSelectedUserId((cur) => (cur === userId ? null : userId));
-  }
+  const header = isOwnCompany ? (
+    <LargeHeader
+      eyebrow={isMainCompany ? 'Main company' : 'Sub company'}
+      title="Audit log"
+      right={<IconButton icon="sync" label="Refresh audit log" onPress={handleRefresh} />}
+    />
+  ) : (
+    <>
+      <NavHeader title={companyLabel || 'Sub Company'} />
+      <View style={styles.readOnlyWrap}>
+        <ReadOnlyBanner subtitle={lastSyncedLabel(lastSynced)} />
+        <CompanySwitcher active="audit" params={{ companyId, companyName: companyLabel }} />
+      </View>
+    </>
+  );
 
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator />
-      </View>
+      <Screen>
+        {header}
+        <Loading />
+      </Screen>
     );
   }
 
-  return (
-    <View style={styles.container}>
-      {companyLabel && (
-        <Text style={styles.syncLabel}>{companyLabel} — {lastSyncedLabel}</Text>
-      )}
+  const dateLabel = appliedDates.from || appliedDates.to ? `${appliedDates.from || 'Start'} – ${appliedDates.to || 'Today'}` : 'Any date';
 
-      {error && (
-        <Text style={styles.error}>Audit log requires connectivity to load — {error}</Text>
-      )}
-
-      <TouchableOpacity onPress={loadUnfiltered} style={styles.refreshButton}>
-        <Text style={styles.refreshText}>Refresh</Text>
-      </TouchableOpacity>
-
-      <View style={styles.filterCard}>
-        <Text style={styles.filterLabel}>Action</Text>
-        <View style={styles.chipRow}>
-          {ACTIONS.map((a) => (
-            <TouchableOpacity
-              key={a}
-              style={[styles.filterChip, actionFilter === a && styles.filterChipActive]}
-              onPress={() => toggleAction(a)}
-            >
-              <Text style={[styles.filterChipText, actionFilter === a && styles.filterChipTextActive]}>
-                {a}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {availableUsers.length > 0 && (
-          <>
-            <Text style={styles.filterLabel}>User</Text>
-            <View style={styles.chipRow}>
-              {availableUsers.map(({ userId, role }) => (
-                <TouchableOpacity
-                  key={userId}
-                  style={[styles.filterChip, selectedUserId === userId && styles.filterChipActive]}
-                  onPress={() => toggleUser(userId)}
-                >
-                  <Text style={[styles.filterChipText, selectedUserId === userId && styles.filterChipTextActive]}>
-                    User #{userId}{role ? ` (${role})` : ''}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </>
-        )}
-
-        <Text style={styles.filterLabel}>From (YYYY-MM-DD)</Text>
-        <TextInput style={styles.input} value={fromInput} onChangeText={setFromInput} placeholder="Optional" />
-
-        <Text style={styles.filterLabel}>To (YYYY-MM-DD)</Text>
-        <TextInput style={styles.input} value={toInput} onChangeText={setToInput} placeholder="Optional" />
-
-        {dateError && <Text style={styles.error}>{dateError}</Text>}
-
-        <TouchableOpacity style={styles.applyButton} onPress={handleApplyFilters}>
-          <Text style={styles.applyButtonText}>Apply Filters</Text>
-        </TouchableOpacity>
+  const filters = (
+    <View style={styles.filters}>
+      {error && <Banner kind="error" title="Audit log needs a connection" subtitle={error} actionLabel="Retry" onAction={handleRefresh} />}
+      <View style={styles.chipRow} accessibilityLabel="Action">
+        <Chip label="All" active={!actionFilter} onPress={() => actionFilter && toggleAction(actionFilter)} />
+        {ACTIONS.map((a) => (
+          <Chip key={a} label={a.charAt(0).toUpperCase() + a.slice(1)} active={actionFilter === a} onPress={() => toggleAction(a)} />
+        ))}
       </View>
-
-      <FlatList
-        data={displayLogs}
-        keyExtractor={(log) => String(log.id)}
-        contentContainerStyle={{ padding: 16 }}
-        ListEmptyComponent={<Text style={styles.empty}>No audit activity yet.</Text>}
-        renderItem={({ item }) => (
-          <View style={styles.entry}>
-            <View style={styles.entryHeader}>
-              <Text style={styles.entityType}>
-                {item.action.toUpperCase()} · {item.entityType} #{item.entityId}
-              </Text>
-              <Text style={styles.timestamp}>{new Date(item.occurredAt).toLocaleString()}</Text>
-            </View>
-            <Text style={styles.meta}>
-              User #{item.userId}{item.role ? ` (${item.role})` : ''} · Company #{item.companyId}
-            </Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll} contentContainerStyle={styles.hChips}>
+        <Chip
+          label={dateLabel}
+          icon="calendar"
+          active={datesOpen}
+          onPress={() => setDatesOpen((o) => !o)}
+          onClear={appliedDates.from || appliedDates.to ? clearDates : undefined}
+        />
+        {availableUsers.map(({ userId, role }) => (
+          <Chip
+            key={userId}
+            icon="user"
+            label={`User #${userId}${roleLabel(role) ? ` · ${roleLabel(role)}` : ''}`}
+            active={selectedUserId === userId}
+            onPress={() => toggleUser(userId)}
+          />
+        ))}
+      </ScrollView>
+      {datesOpen && (
+        <Card padding={16} gap={12}>
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            <Field style={{ flex: 1 }} label="From" value={fromInput} onChangeText={setFromInput} placeholder="YYYY-MM-DD" />
+            <Field style={{ flex: 1 }} label="To" value={toInput} onChangeText={setToInput} placeholder="YYYY-MM-DD" />
           </View>
+          {dateError && <Text style={styles.error}>{dateError}</Text>}
+          <Button title="Apply dates" variant="dark" height={48} onPress={handleApplyDates} />
+        </Card>
+      )}
+    </View>
+  );
+
+  return (
+    <Screen>
+      {header}
+      <SectionList
+        sections={sections}
+        keyExtractor={(log) => String(log.id)}
+        ListHeaderComponent={filters}
+        contentContainerStyle={styles.content}
+        stickySectionHeadersEnabled={false}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
+        ListEmptyComponent={<EmptyState icon="list" title="No audit activity yet" body="Creates, updates and deletes will show up here." />}
+        renderSectionHeader={({ section }) => <Text style={styles.day}>{section.title}</Text>}
+        renderItem={({ item, index, section }) => (
+          <Entry log={item} first={index === 0} last={index === section.data.length - 1} />
         )}
       />
+    </Screen>
+  );
+}
+
+function Entry({ log, first, last }) {
+  const s = ACTION_STYLE[log.action] || ACTION_STYLE.update;
+  const { subject, detail } = describe(log);
+  const role = roleLabel(log.role);
+  return (
+    <View style={[styles.entry, first && styles.entryFirst, last && styles.entryLast, !first && styles.entryDivider]}>
+      <View style={[styles.badge, { backgroundColor: s.bg }]}>
+        <Icon name={s.icon} size={18} color={s.fg} strokeWidth={2} />
+      </View>
+      <View style={{ flex: 1, gap: 6 }}>
+        <Text style={styles.sentence}>
+          <Text style={styles.strong}>User #{log.userId}</Text> {s.verb} <Text style={styles.strong}>{subject}</Text>
+        </Text>
+        <Text style={type.caption}>
+          {humanize(log.entityType || 'Record')} · {formatTime(log.occurredAt)}
+          {role ? ` · ${role}` : ''}
+        </Text>
+        {detail ? (
+          <View style={styles.detail}>
+            <Text style={styles.detailText}>{detail}</Text>
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  error: { color: '#d9534f', padding: 16, fontSize: 13 },
-  refreshButton: { alignSelf: 'flex-end', marginRight: 16, marginTop: 8 },
-  syncLabel: { fontSize: 11, color: '#999', margin: 16, marginBottom: 0 },
-  refreshText: { color: '#2f6fed', fontWeight: '600' },
-  filterCard: { backgroundColor: '#f4f6fb', borderRadius: 10, padding: 12, margin: 16, marginBottom: 0 },
-  filterLabel: { fontSize: 12, color: '#666', marginBottom: 6, marginTop: 8 },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  filterChip: { backgroundColor: '#eef2fd', borderRadius: 14, paddingVertical: 6, paddingHorizontal: 12 },
-  filterChipActive: { backgroundColor: '#2f6fed' },
-  filterChipText: { color: '#2f6fed', fontWeight: '600', fontSize: 12 },
-  filterChipTextActive: { color: '#fff' },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 10, fontSize: 14, backgroundColor: '#fff' },
-  applyButton: { backgroundColor: '#2f6fed', borderRadius: 8, padding: 12, alignItems: 'center', marginTop: 12 },
-  applyButtonText: { color: '#fff', fontWeight: '600' },
-  empty: { textAlign: 'center', color: '#999', marginTop: 40 },
+  readOnlyWrap: { paddingHorizontal: 20, paddingTop: 2, paddingBottom: 12, gap: 14 },
+  content: { paddingHorizontal: 20, paddingBottom: 32 },
+  filters: { gap: 12, paddingBottom: 4 },
+  chipRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  hScroll: { marginHorizontal: -20, flexGrow: 0 },
+  hChips: { paddingHorizontal: 20, gap: 8 },
+  error: { fontSize: 12, color: colors.danger, fontFamily: fonts.medium },
+  day: { fontFamily: fonts.semibold, fontSize: 12, letterSpacing: 0.7, textTransform: 'uppercase', color: colors.ink3, marginTop: 18, marginBottom: 8 },
   entry: {
-    borderWidth: 1, borderColor: '#eee', borderRadius: 10, padding: 12, marginBottom: 10,
+    flexDirection: 'row', gap: 12, paddingVertical: 14, paddingHorizontal: 16, backgroundColor: colors.surface,
+    borderLeftWidth: 1, borderRightWidth: 1, borderColor: colors.line,
   },
-  entryHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
-  entityType: { fontWeight: '600', fontSize: 13 },
-  timestamp: { fontSize: 11, color: '#999' },
-  meta: { fontSize: 12, color: '#777' },
+  entryFirst: { borderTopWidth: 1, borderTopLeftRadius: 18, borderTopRightRadius: 18 },
+  entryLast: { borderBottomWidth: 1, borderBottomLeftRadius: 18, borderBottomRightRadius: 18 },
+  entryDivider: { borderTopWidth: 1, borderTopColor: colors.line },
+  badge: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  sentence: { fontSize: 14, lineHeight: 20, color: colors.ink2 },
+  strong: { fontFamily: fonts.semibold, color: colors.ink },
+  detail: { alignSelf: 'flex-start', backgroundColor: colors.ground, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  detailText: { fontFamily: fonts.mono, fontSize: 12, lineHeight: 17, color: colors.ink2 },
 });
