@@ -9,11 +9,13 @@ Main Company and Sub Company roles — the UI adapts based on who's logged in.
 npm install
 ```
 
-Then edit `src/api/client.js` and set `API_BASE_URL` to your machine's **LAN IP**, not
-`localhost` — a physical phone or emulator can't resolve your computer's `localhost`.
+Production defaults to `https://inventryapi.onrender.com/api`. To test against an API on your
+PC, set `EXPO_PUBLIC_API_URL` to the PC's **LAN IP**, not `localhost` — a physical phone or
+emulator cannot resolve your computer's `localhost`.
 
-```js
-export const API_BASE_URL = 'http://192.168.1.50:4000/api'; // example
+```dotenv
+# .env
+EXPO_PUBLIC_API_URL=http://192.168.1.50:4000/api
 ```
 
 Make sure the API (`InventoryApi/`) is running first, then:
@@ -31,8 +33,8 @@ press `a` for an Android emulator / `i` for an iOS simulator.
 src/
   api/client.js          Thin fetch wrapper for all API calls
   context/AuthContext.js Login/logout, cached session for offline use (AUTH-02)
-  db/localDb.js          On-device SQLite schema + queries (items, transactions, sync_meta)
-  sync/syncEngine.js      Push pending items/transactions, pull updates, track last sync
+  db/localDb.js          SQLite data, transactional outbox, per-user cursors
+  sync/syncEngine.js     Idempotent upload + ordered cursor download
   navigation/RootNavigator.js  Role-based screen routing (single app binary — ROLE-06)
   screens/
     LoginScreen.js
@@ -46,14 +48,15 @@ src/
 
 ## Key behaviors implemented
 
-- **Offline-first inventory & transactions** (INV-06, SYNC-01): adding items and recording
-  stock in/out/adjustment all write to local SQLite immediately and work with zero
-  connectivity. A background timer (`startConnectivityWatcher`) attempts sync every 15s;
-  pulling to refresh on the Inventory screen also triggers an immediate sync attempt.
+- **Offline-first inventory & transactions** (INV-06, SYNC-01): local data and its outbox
+  operation commit together in SQLite. Stable operation IDs make retries safe, while a
+  per-user sequence cursor downloads ordered changes and deletion tombstones. A background
+  timer attempts sync every 15s; pull-to-refresh also triggers it immediately.
 - **Default sale price in the UI** (PRC-08): leaving the sale price blank on a "Stock Out"
   shows a note confirming which price will be used, matching the server's default logic.
-- **Sync status indicator** (SYNC-06): the Inventory screen always shows "All synced" or
-  "N record(s) pending sync".
+- **Sync status and conflicts** (SYNC-06/SYNC-08): the Inventory screen shows unsynced,
+  retrying, and conflicting changes. Item versions prevent one device from silently
+  overwriting a newer edit from another device.
 - **Main Company oversight** (RPT-06/RPT-07): the Dashboard lists linked Sub Companies (or
   shows a clean empty state if there are none — ROLE-07) and lets you drill into any one of
   them, read-only (the item list disables tapping into a transaction screen when viewing
@@ -72,6 +75,3 @@ src/
   and drills into Sub Companies individually, but there's no side-by-side metric view yet.
 - **Report export to PDF/Excel/CSV** (RPT-05) is not implemented on either the client or
   server side yet.
-- **Conflict handling**: the sync engine currently doesn't detect or flag conflicting edits
-  made across two devices before syncing — matches the PRD's default (last-write-wins) but
-  no explicit conflict UI exists yet.
