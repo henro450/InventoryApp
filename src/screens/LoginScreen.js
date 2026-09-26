@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView, Pressable } from 'react-native';
+import { View, StyleSheet, Alert, KeyboardAvoidingView, ScrollView, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { fingerprintAvailable, getFingerprintUser } from '../auth/biometrics';
 import Icon from '../components/Icon';
+import BrandMark from '../components/BrandMark';
 import { Text, Field, Button, IconButton, Banner } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
@@ -76,17 +77,20 @@ export default function LoginScreen({ navigation, route }) {
   }
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.flex} behavior="padding">
       <ScrollView
         style={styles.flex}
         contentContainerStyle={[styles.content, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 28 }]}
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets
       >
         <View style={styles.brand}>
-          <View style={styles.brandTile}>
-            <Icon name="logo" size={20} color="#FFFFFF" />
+          <BrandMark size={40} />
+          <View>
+            <Text style={styles.brandName}>
+              Henro<Text style={{ color: colors.primary }}>Tech</Text>
+            </Text>
+            <Text style={styles.brandSub}>Inventory Management</Text>
           </View>
-          <Text style={styles.brandName}>Inventory</Text>
         </View>
 
         <View style={styles.intro}>
@@ -178,8 +182,8 @@ const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: colors.ground },
   content: { flexGrow: 1, paddingHorizontal: 24 },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  brandTile: { width: 36, height: 36, borderRadius: 11, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
-  brandName: { fontFamily: fonts.display, fontSize: 20, letterSpacing: -0.4 },
+  brandName: { fontFamily: fonts.display, fontSize: 22, lineHeight: 24, letterSpacing: -0.5 },
+  brandSub: { fontFamily: fonts.medium, fontSize: 10, letterSpacing: 2, textTransform: 'uppercase', color: colors.ink2 },
   intro: { marginTop: 56, gap: 10 },
   heading: { fontFamily: fonts.display, fontSize: 36, lineHeight: 40, letterSpacing: -0.9 },
   subtitle: { fontSize: 16, lineHeight: 24, color: colors.ink2 },

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, ScrollView, StyleSheet, TextInput, Alert, Pressable, RefreshControl } from 'react-native';
+import { View, ScrollView, StyleSheet, TextInput, Alert, Pressable, RefreshControl, KeyboardAvoidingView } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
 import { setLocalCompanyThreshold } from '../db/localDb';
@@ -7,7 +7,7 @@ import { getAlerts } from '../reports/localReports';
 import { runSync } from '../sync/syncEngine';
 import { useLocalRefresh } from '../hooks/useLocalRefresh';
 import LocalDataNotice from '../components/LocalDataNotice';
-import { formatDate, formatMoney, formatPercent } from '../utils/format';
+import { formatDate, formatMoney, formatPercent, cleanNumberInput, groupDigits } from '../utils/format';
 import Icon from '../components/Icon';
 import {
   Text, Screen, NavHeader, LargeHeader, IconButton, SectionTitle, CountBadge, ListCard, Card, Divider, Pill,
@@ -94,8 +94,11 @@ export default function AlertsScreen({ route, navigation }) {
   return (
     <Screen>
       {header}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
       <ScrollView
         contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
       >
         <LocalDataNotice user={user} onSynced={load} />
@@ -179,8 +182,8 @@ export default function AlertsScreen({ route, navigation }) {
             </View>
             <View style={styles.thresholdInputBox}>
               <TextInput
-                value={thresholdInput}
-                onChangeText={setThresholdInput}
+                value={groupDigits(thresholdInput)}
+                onChangeText={(t) => setThresholdInput(cleanNumberInput(t))}
                 keyboardType="numeric"
                 placeholder="20"
                 placeholderTextColor={colors.placeholder}
@@ -194,6 +197,7 @@ export default function AlertsScreen({ route, navigation }) {
         )}
         {!isOwnCompany && <InlineEmpty>Only the company itself can change its anomaly threshold.</InlineEmpty>}
       </ScrollView>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }

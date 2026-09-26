@@ -24,6 +24,30 @@ export function formatSubscription(subscription) {
   return `${price} · ${status}`;
 }
 
+// --- Number inputs -------------------------------------------------------------------------
+// Number fields show digits grouped as the user types ("3,000", "12,500.5") while the screen
+// keeps the plain value ("3000", "12500.5") — so Number(value) and saving work unchanged.
+
+// Typed text -> plain value: digits only, plus one decimal point when decimals are allowed.
+export function cleanNumberInput(text, { decimal = true } = {}) {
+  let raw = String(text ?? '').replace(decimal ? /[^0-9.]/g : /[^0-9]/g, '');
+  if (decimal) {
+    const dot = raw.indexOf('.');
+    if (dot !== -1) raw = raw.slice(0, dot + 1) + raw.slice(dot + 1).replace(/\./g, '');
+  }
+  return raw;
+}
+
+// Plain value -> what the field shows: thousands separated by commas; a decimal point and
+// decimals are kept exactly as typed (so "3,000." and "3,000.50" stay while typing).
+export function groupDigits(raw) {
+  const value = String(raw ?? '');
+  if (value === '') return '';
+  const [whole, ...rest] = value.split('.');
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return rest.length ? `${grouped}.${rest.join('')}` : grouped;
+}
+
 export function formatNumber(n) {
   return String(Math.round(Number(n || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }

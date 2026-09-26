@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, ScrollView, StyleSheet, KeyboardAvoidingView } from 'react-native';
 import { api } from '../api/client';
 import { Text, Screen, NavHeader, Field, Button, Banner, Note } from '../components/ui';
 import { colors, fonts } from '../theme';
@@ -38,8 +38,8 @@ export default function ForgotPasswordScreen({ navigation, route }) {
   return (
     <Screen>
       <NavHeader title="" onBack={() => (navigation.canGoBack() ? navigation.goBack() : backToLogin())} />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
           <View style={{ gap: 8 }}>
             <Text style={styles.heading} accessibilityRole="header">
               Forgot password

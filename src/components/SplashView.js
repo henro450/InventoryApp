@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Animated, Easing, StatusBar } from 'react-native';
-import Icon from './Icon';
+import BrandMark from './BrandMark';
 import { colors, fonts } from '../theme';
 import appConfig from '../../app.json';
 
@@ -22,16 +22,19 @@ export default function SplashView({ fontsReady = true, message = 'Restoring you
   const translateX = progress.interpolate({ inputRange: [0, 1], outputRange: [-60, 132] });
 
   return (
-    <View style={styles.container} accessibilityLabel={`Inventory. ${message}`}>
+    <View style={styles.container} accessibilityLabel={`HenroTech Inventory Management. ${message}`}>
       <StatusBar barStyle="light-content" />
       <View style={[styles.ring, { width: 560, height: 560, borderRadius: 280, opacity: 0.05 }]} />
       <View style={[styles.ring, { width: 400, height: 400, borderRadius: 200, opacity: 0.07 }]} />
       <View style={[styles.ring, { width: 250, height: 250, borderRadius: 125, opacity: 0.09 }]} />
 
       <View style={styles.logo}>
-        <Icon name="logo" size={50} color="#FFFFFF" strokeWidth={1.6} />
+        <BrandMark size={96} />
       </View>
-      <Text style={[styles.wordmark, f(fonts.display)]}>Inventory</Text>
+      <Text style={[styles.wordmark, f(fonts.display)]}>
+        Henro<Text style={{ color: '#8FA3F5' }}>Tech</Text>
+      </Text>
+      <Text style={[styles.descriptor, fontsReady && { fontFamily: fonts.medium }]}>INVENTORY MANAGEMENT</Text>
       <Text style={[styles.tagline, fontsReady && { fontFamily: fonts.regular }]}>Stock you can trust, online or off.</Text>
 
       <View style={styles.footer}>
@@ -53,7 +56,8 @@ const styles = StyleSheet.create({
     shadowColor: colors.primary, shadowOpacity: 0.5, shadowRadius: 28, shadowOffset: { width: 0, height: 20 }, elevation: 12,
   },
   wordmark: { marginTop: 28, fontSize: 40, lineHeight: 46, letterSpacing: -1.2, color: '#FFFFFF' },
-  tagline: { marginTop: 10, fontSize: 15, color: '#A7AEC2' },
+  descriptor: { marginTop: 6, fontSize: 11, letterSpacing: 3, color: '#B9BFD0' },
+  tagline: { marginTop: 14, fontSize: 15, color: '#A7AEC2' },
   footer: { position: 'absolute', bottom: 64, alignItems: 'center', gap: 14 },
   track: { width: 132, height: 3, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.14)', overflow: 'hidden' },
   fill: { width: 60, height: 3, borderRadius: 2, backgroundColor: '#FFFFFF' },

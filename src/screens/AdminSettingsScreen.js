@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, KeyboardAvoidingView } from 'react-native';
 import { api } from '../api/client';
 import { Text, Screen, NavHeader, Card, SectionTitle, Field, Button, Banner, Loading } from '../components/ui';
 import { type } from '../theme';
@@ -65,8 +65,8 @@ export default function AdminSettingsScreen({ navigation }) {
   return (
     <Screen>
       <NavHeader title="Subscription settings" />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
           <Card padding={18} gap={14}>
             <SectionTitle title="Subscription period" />
             <Field
@@ -108,7 +108,7 @@ export default function AdminSettingsScreen({ navigation }) {
             <Text style={[type.caption, { marginTop: -6 }]}>Shown to company admins on their Subscription screen.</Text>
             <Field label="Bank" value={form.bankName} onChangeText={set('bankName')} placeholder="e.g. Zenith Bank" />
             <Field label="Account name" value={form.accountName} onChangeText={set('accountName')} placeholder="e.g. HenroTech Ltd" />
-            <Field label="Account number" keyboardType="number-pad" value={form.accountNumber} onChangeText={set('accountNumber')} placeholder="10-digit NUBAN" mono />
+            <Field label="Account number" keyboardType="number-pad" grouping={false} value={form.accountNumber} onChangeText={set('accountNumber')} placeholder="10-digit NUBAN" mono />
             <Field
               label="Payment instructions"
               optional
