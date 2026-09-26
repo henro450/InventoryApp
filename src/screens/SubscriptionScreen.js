@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { View, ScrollView, StyleSheet, Alert, RefreshControl, Pressable, Image } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, RefreshControl, Pressable, Image, KeyboardAvoidingView } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard from 'expo-clipboard';
 import { api, API_BASE_URL } from '../api/client';
@@ -122,9 +122,11 @@ export default function SubscriptionScreen() {
   return (
     <Screen>
       <NavHeader title="Subscription" />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
       <ScrollView
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
       >
         {savedAt && <Banner kind="info" icon="cloud" title="Offline · saved copy" subtitle={`From ${formatDateTime(savedAt)}.`} actionLabel="Retry" onAction={handleRefresh} />}
@@ -262,6 +264,7 @@ export default function SubscriptionScreen() {
           )}
         </Card>
       </ScrollView>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }

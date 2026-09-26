@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Inventory App",
+    "name": "HenroTech",
     "slug": "inventory-app",
     "owner": "henro450",
     "version": "1.0.0",
@@ -8,6 +8,8 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
       "backgroundColor": "#0E1322"
     },
     "android": {
@@ -15,7 +17,12 @@
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
-      ]
+      ],
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1F3FD1"
+      }
     },
     "ios": {
       "supportsTablet": true,
@@ -58,6 +65,10 @@
       "eas": {
         "projectId": "3cd57cab-96e7-4556-b231-00f0d9bca2fb"
       }
+    },
+    "icon": "./assets/icon.png",
+    "web": {
+      "favicon": "./assets/favicon.png"
     }
   }
 }

@@ -16,7 +16,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Icon from './Icon';
 import { colors, fonts, radius, type, shadow } from '../theme';
-import { initials, dateToYmd, ymdToDate, formatYmd } from '../utils/format';
+import { initials, dateToYmd, ymdToDate, formatYmd, cleanNumberInput, groupDigits } from '../utils/format';
+
+const NUMBER_KEYBOARDS = new Set(['decimal-pad', 'number-pad', 'numeric']);
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { useAuth } from '../context/AuthContext';
 
@@ -172,11 +174,23 @@ export function Button({ title, onPress, variant = 'primary', icon, loading = fa
   );
 }
 
+// Number fields (keyboardType decimal-pad / number-pad / numeric) show thousands separators as
+// the user types; value and onChangeText stay plain ("3000"). Pass grouping={false} for digit
+// strings that aren't amounts (account numbers, codes).
 export const Field = React.forwardRef(function Field(
-  { label, optional, hint, error, leadingIcon, prefix, trailing, mono, style, inputStyle, ...inputProps },
+  { label, optional, hint, error, leadingIcon, prefix, trailing, mono, style, inputStyle, grouping = true, ...inputProps },
   ref
 ) {
   const [focused, setFocused] = useState(false);
+  if (grouping && NUMBER_KEYBOARDS.has(inputProps.keyboardType) && inputProps.onChangeText) {
+    const decimal = inputProps.keyboardType !== 'number-pad';
+    const onChangeText = inputProps.onChangeText;
+    inputProps = {
+      ...inputProps,
+      value: groupDigits(cleanNumberInput(inputProps.value, { decimal })),
+      onChangeText: (text) => onChangeText(cleanNumberInput(text, { decimal })),
+    };
+  }
   return (
     <View style={[{ gap: 8 }, style]}>
       {label ? (
@@ -451,8 +465,8 @@ export function Stepper({ value, onChange, label, big = false, focusedRing = fal
       <View style={[styles.stepper, big && styles.stepperBig, focusedRing && styles.inputBoxFocused]}>
         <IconButton icon="minus" label={`Decrease ${label || 'value'}`} variant="muted" size={btnSize} onPress={() => step(-1)} disabled={num <= 0} />
         <TextInput
-          value={String(value)}
-          onChangeText={(t) => onChange(t.replace(decimal ? /[^0-9.]/g : /[^0-9]/g, ''))}
+          value={groupDigits(cleanNumberInput(value, { decimal }))}
+          onChangeText={(t) => onChange(cleanNumberInput(t, { decimal }))}
           keyboardType={decimal ? 'decimal-pad' : 'number-pad'}
           placeholder="0"
           placeholderTextColor={colors.placeholder}
@@ -584,11 +598,11 @@ export function Sheet({ visible, onClose, title, description, children, footer }
   const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose} statusBarTranslucent>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.sheetOverlay}>
+      <KeyboardAvoidingView behavior="padding" style={styles.sheetOverlay}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
         <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) + 14 }]} accessibilityViewIsModal>
           <View style={styles.sheetHandle} />
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 16 }} bounces={false}>
+          <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets contentContainerStyle={{ gap: 16 }} bounces={false}>
             <View style={{ gap: 6 }}>
               <Text style={type.sheetTitle} accessibilityRole="header">
                 {title}

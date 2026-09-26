@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, ScrollView, StyleSheet, Alert, Pressable, RefreshControl } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, Pressable, RefreshControl, KeyboardAvoidingView } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
 import { getLastSyncedAt, getCached, setCached } from '../db/localDb';
@@ -268,9 +268,11 @@ export default function ReportsScreen({ route, navigation }) {
   return (
     <Screen>
       {header}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
       <ScrollView
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
       >
         <LocalDataNotice user={user} onSynced={() => loadLocal(appliedFilters)} />
@@ -723,6 +725,7 @@ export default function ReportsScreen({ route, navigation }) {
           <Button title="Generate snapshot now" variant="secondary" icon="sync" height={48} onPress={handleGenerateSnapshot} loading={generatingSnapshot} />
         </Card>
       </ScrollView>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }

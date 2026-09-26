@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { View, ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, KeyboardAvoidingView } from 'react-native';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 import { useFocusEffect } from '@react-navigation/native';
@@ -199,8 +199,8 @@ export default function StockTransactionScreen({ route, navigation }) {
   return (
     <Screen>
       <NavHeader title="Record transaction" />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
           {subscriptionBlocked && (
             <Banner
               kind="error"

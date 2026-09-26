@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, ScrollView, StyleSheet, KeyboardAvoidingView } from 'react-native';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { Text, Screen, NavHeader, Field, Button, IconButton, Banner, Note, EmptyState, Loading } from '../components/ui';
@@ -180,8 +180,8 @@ export default function SetPasswordScreen({ navigation, route }) {
   return (
     <Screen>
       <NavHeader title={info && !user && !loadError ? '' : title} onBack={handleBack} />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
           {body}
         </ScrollView>
       </KeyboardAvoidingView>
