@@ -1,62 +1,51 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, ScrollView, Pressable, StyleSheet, RefreshControl } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
-import { api } from '../api/client';
-import { getLocalItems, getLastSyncedAt, getSyncStatusSummary } from '../db/localDb';
+import { getLocalItems, getLastSyncedAt, getSyncStatusSummary, getLocalSubCompanies } from '../db/localDb';
+import { getOversightSummary, getDebtors } from '../reports/localReports';
+import { useLocalRefresh } from '../hooks/useLocalRefresh';
+import { useOnline } from '../hooks/useOnline';
 import { runSync } from '../sync/syncEngine';
 import { isLowStock } from '../utils/inventory';
 import { formatMoney, formatNumber, lastSyncedLabel, plural, timeAgo } from '../utils/format';
 import Icon from '../components/Icon';
 import {
-  Text, Screen, LargeHeader, IconButton, AccountButton, Pill, Banner, SectionTitle, ListCard, Divider,
+  Text, Screen, LargeHeader, IconButton, AccountButton, Pill, SectionTitle, ListCard, Divider,
   LetterTile, EmptyState, Loading,
 } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
 // RPT-06: Main Company dashboard. If there are no linked Sub Companies, this simply shows
 // an empty state below — a standalone company (ROLE-07) is not treated as an error state.
+// Everything here is computed from this phone's database (companies, items, and transactions
+// pulled by sync, plus unsynced local changes), so it works the same offline.
 export default function DashboardScreen({ navigation }) {
   const { user, logout, allowSubCompanies } = useAuth();
   const [subCompanies, setSubCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(null);
   const [lowStockCount, setLowStockCount] = useState(0);
   const [syncSummary, setSyncSummary] = useState({ total: 0 });
   const [summary, setSummary] = useState(null);
+  const [debt, setDebt] = useState(null);
+  const online = useOnline();
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const [{ subCompanies: subs }, summaryResp] = await Promise.all([api.getMyCompany(), api.getOversightSummary()]);
-      setSubCompanies(subs);
-      setSummary(summaryResp);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  function load() {
+    setSubCompanies(getLocalSubCompanies(user.companyId));
+    setSummary(getOversightSummary(user));
+    setDebt(getDebtors(user.companyId).totals);
+    // INV-05: own-company low-stock count only — not aggregated across Sub Companies.
+    setLowStockCount(getLocalItems(user.companyId).filter(isLowStock).length);
+    setSyncSummary(getSyncStatusSummary(user.id));
+    setLoading(false);
+  }
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  // INV-05: own-company low-stock count only — not aggregated across Sub Companies.
-  useFocusEffect(
-    useCallback(() => {
-      setLowStockCount(getLocalItems(user.companyId).filter(isLowStock).length);
-      setSyncSummary(getSyncStatusSummary(user.id));
-    }, [user.companyId, user.id])
-  );
+  useLocalRefresh(load);
 
   async function handleRefresh() {
     setRefreshing(true);
     await runSync(user.id);
-    await load();
-    setSyncSummary(getSyncStatusSummary(user.id));
-    setLowStockCount(getLocalItems(user.companyId).filter(isLowStock).length);
+    load();
     setRefreshing(false);
   }
 
@@ -90,11 +79,27 @@ export default function DashboardScreen({ navigation }) {
           ) : (
             <Pill kind="ok" icon="check" label={lastSynced ? `All synced · ${timeAgo(lastSynced)}` : 'Not yet synced'} />
           )}
-          <Text style={type.caption}>Pull down to refresh</Text>
+          <Text style={type.caption}>{online ? 'Pull down to refresh' : 'Offline · data on this phone'}</Text>
         </View>
 
-        {error && (
-          <Banner kind="error" icon="alert" title="Couldn't load company data" subtitle={`Are you offline? ${error}`} actionLabel="Retry" onAction={load} />
+        {debt && debt.outstanding > 0 && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityHint="Opens the list of people owing"
+            onPress={() => navigation.navigate('Debtors')}
+            style={({ pressed }) => [styles.debtRow, pressed && { backgroundColor: colors.surfaceMuted }]}
+          >
+            <Icon name="wallet" size={20} color={colors.danger} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.debtTitle}>{formatMoney(debt.outstanding)} owed to you</Text>
+              <Text style={type.caption}>{plural(debt.customersOwing, 'customer')} owing · tap to see who</Text>
+            </View>
+            <Icon name="chev" size={18} color={colors.chevron} />
+          </Pressable>
+        )}
+
+        {syncSummary.total > 0 && (
+          <Text style={type.caption}>Figures below include the changes from this phone that haven't synced yet.</Text>
         )}
 
         {totals && (
@@ -231,6 +236,11 @@ export default function DashboardScreen({ navigation }) {
 const styles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingBottom: 32, gap: 16 },
   syncRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  debtRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 16,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line,
+  },
+  debtTitle: { fontFamily: fonts.semibold, fontSize: 15 },
   hero: { backgroundColor: colors.ink, borderRadius: 22, padding: 20, gap: 14 },
   heroTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   heroLabel: { fontFamily: fonts.medium, fontSize: 13, color: colors.onDarkMuted },

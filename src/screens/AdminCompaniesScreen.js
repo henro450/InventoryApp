@@ -2,6 +2,8 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { View, FlatList, StyleSheet, Alert, RefreshControl } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../api/client';
+import { getCached, setCached } from '../db/localDb';
+import { formatDateTime } from '../utils/format';
 import { useAuth } from '../context/AuthContext';
 import {
   Text, Screen, LargeHeader, IconButton, AccountButton, SearchField, Card, LetterTile, Pill, Button, Banner, EmptyState,
@@ -35,13 +37,26 @@ export default function AdminCompaniesScreen() {
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   const [resendingId, setResendingId] = useState(null);
+  const [savedAt, setSavedAt] = useState(null); // showing the saved offline copy
 
   const load = useCallback(() => {
     setError(null);
     return api
       .adminListCompanies()
-      .then(({ companies: list }) => setCompanies(list))
-      .catch((err) => setError(err.message))
+      .then(({ companies: list }) => {
+        setCompanies(list);
+        setSavedAt(null);
+        setCached('adminCompanies', list);
+      })
+      .catch((err) => {
+        const saved = getCached('adminCompanies');
+        if (saved) {
+          setCompanies(saved.data);
+          setSavedAt(saved.savedAt);
+        } else {
+          setError(err.message);
+        }
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -170,6 +185,16 @@ export default function AdminCompaniesScreen() {
               {pendingCount > 0 ? ` · ${pendingCount} waiting to set a password` : ''}.
             </Text>
             {error && <Banner kind="error" title="Couldn't load companies" subtitle={`Are you offline? ${error}`} actionLabel="Retry" onAction={handleRefresh} />}
+            {savedAt && (
+              <Banner
+                kind="info"
+                icon="cloud"
+                title="Offline · registering or editing companies needs a connection"
+                subtitle={`Showing the list saved ${formatDateTime(savedAt)}.`}
+                actionLabel="Retry"
+                onAction={handleRefresh}
+              />
+            )}
             {companies.length > 3 && <SearchField value={query} onChangeText={setQuery} placeholder="Search by company or email" />}
           </View>
         }

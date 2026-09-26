@@ -2,14 +2,19 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, StyleSheet, Alert, KeyboardAvoidingView, Platform, ScrollView, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
+import { fingerprintAvailable, getFingerprintUser } from '../auth/biometrics';
 import Icon from '../components/Icon';
 import { Text, Field, Button, IconButton, Banner } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
 // route.params.email / route.params.notice are set after a password is set from an emailed
 // link, so the user lands here with their email filled in and a confirmation banner.
+// If this phone is set up for fingerprint login, the fingerprint prompt opens automatically
+// (except right after setting a password or logging out), with a button to try again.
 export default function LoginScreen({ navigation, route }) {
-  const { login } = useAuth();
+  const { login, loginWithFingerprint, shouldAutoPromptFingerprint } = useAuth();
+  const [fingerprintUser, setFingerprintUser] = useState(null); // { id, email, name } registered on this phone
+  const [fingerprintBusy, setFingerprintBusy] = useState(false);
   const insets = useSafeAreaInsets();
   const [email, setEmail] = useState(route.params?.email || '');
   const [password, setPassword] = useState('');
@@ -21,6 +26,38 @@ export default function LoginScreen({ navigation, route }) {
   useEffect(() => {
     if (route.params?.email) setEmail(route.params.email);
   }, [route.params?.email]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [available, registered] = await Promise.all([fingerprintAvailable(), getFingerprintUser()]);
+      if (cancelled || !available || !registered) return;
+      setFingerprintUser(registered);
+      if (shouldAutoPromptFingerprint() && !route.params?.notice) handleFingerprintLogin();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleFingerprintLogin() {
+    setFingerprintBusy(true);
+    try {
+      await loginWithFingerprint(); // null when the scan is cancelled; navigation switches on success
+    } catch (err) {
+      if (err.code === 'BIOMETRIC_INVALID') {
+        setFingerprintUser(null);
+        Alert.alert('Fingerprint login is off', err.message);
+      } else {
+        Alert.alert(
+          'Login failed',
+          err.status ? err.message : "Couldn't reach the server. Fingerprint login needs an internet connection."
+        );
+      }
+    } finally {
+      setFingerprintBusy(false);
+    }
+  }
 
   async function handleLogin() {
     if (!email || !password) {
@@ -106,6 +143,20 @@ export default function LoginScreen({ navigation, route }) {
             <Text style={styles.forgotText}>Forgot password?</Text>
           </Pressable>
           <Button title="Log in" onPress={handleLogin} loading={submitting} />
+          {fingerprintUser && (
+            <View style={{ gap: 6 }}>
+              <Button
+                title="Log in with fingerprint"
+                variant="secondary"
+                icon="lock"
+                onPress={handleFingerprintLogin}
+                loading={fingerprintBusy}
+              />
+              <Text style={styles.fingerprintFor} numberOfLines={1}>
+                as {fingerprintUser.email}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.offline}>
@@ -134,6 +185,7 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 16, lineHeight: 24, color: colors.ink2 },
   form: { marginTop: 32, gap: 18 },
   forgot: { alignSelf: 'flex-end', marginTop: -6 },
+  fingerprintFor: { ...type.caption, textAlign: 'center' },
   forgotText: { fontFamily: fonts.semibold, fontSize: 14, color: colors.primary },
   offline: {
     marginTop: 22, flexDirection: 'row', gap: 12, alignItems: 'flex-start', padding: 14, borderRadius: 14,

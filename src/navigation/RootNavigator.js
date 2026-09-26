@@ -19,6 +19,8 @@ import ManageSubCompaniesScreen from '../screens/ManageSubCompaniesScreen';
 import CompareSubCompaniesScreen from '../screens/CompareSubCompaniesScreen';
 import ScanBarcodeScreen from '../screens/ScanBarcodeScreen';
 import AlertsScreen from '../screens/AlertsScreen';
+import DebtorsScreen from '../screens/DebtorsScreen';
+import DebtorDetailScreen from '../screens/DebtorDetailScreen';
 import SplashView from '../components/SplashView';
 import TabBar from '../components/TabBar';
 import { startConnectivityWatcher } from '../sync/syncEngine';
@@ -89,6 +91,9 @@ export default function RootNavigator() {
             <Stack.Screen name="Home" component={HomeTabs} />
             <Stack.Screen name="AddItem" component={AddItemScreen} />
             <Stack.Screen name="StockTransaction" component={StockTransactionScreen} />
+            {/* People owing from part-paid/credit sales (own company; Main Company can open a Sub's read-only). */}
+            <Stack.Screen name="Debtors" component={DebtorsScreen} />
+            <Stack.Screen name="DebtorDetail" component={DebtorDetailScreen} />
             <Stack.Screen
               name="ScanBarcode"
               component={ScanBarcodeScreen}

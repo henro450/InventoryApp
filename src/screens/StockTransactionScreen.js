@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { View, ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
-import { saveLocalStockTransaction } from '../db/localDb';
+import { useFocusEffect } from '@react-navigation/native';
+import { saveLocalStockTransaction, getLocalItemByLocalId } from '../db/localDb';
 import { useAuth } from '../context/AuthContext';
 import { runSync } from '../sync/syncEngine';
 import { formatMoney, formatNumber } from '../utils/format';
+import { formatPhone } from '../utils/phone';
 import Icon from '../components/Icon';
-import { Text, Screen, NavHeader, Card, Divider, Segmented, Stepper, Field, Note, Stat, BottomBar, Button } from '../components/ui';
+import CustomerSheet from '../components/CustomerSheet';
+import { Text, Screen, NavHeader, Card, Divider, Segmented, Stepper, Field, Note, Stat, BottomBar, Button, IconButton } from '../components/ui';
 import { colors, fonts, type as typo } from '../theme';
 
 const TYPES = [
@@ -16,26 +19,59 @@ const TYPES = [
   { key: 'adjustment', label: 'Adjustment' },
 ];
 
+// How the customer paid for a sale; recorded on stock-out only and split out in Reports.
+const PAYMENT_METHODS = [
+  { key: 'cash', label: 'Cash' },
+  { key: 'transfer', label: 'Transfer' },
+];
+
 // This screen is the client-side counterpart to PRC-07/PRC-08/PRC-09 on the server:
 // - Purchase ("Stock In"): price is required, and may be higher or lower than any
 //   previous purchase price for the item (PRC-06) — no validation prevents that here.
 // - Sale ("Stock Out"): price field is optional. If left blank, we show the item's last
 //   known purchase price as the value that will be used, and label it clearly so the
 //   user can review or override before saving (PRC-08).
+// - Part payment (Stock Out): "Amount paid" is optional — blank means paid in full. Anything
+//   less (including 0, fully on credit) leaves a balance owed by a customer, chosen from the
+//   phone's contacts or typed in with the contact button beside the field. Balances are
+//   followed up on the Debtors screen.
 // Both transaction types are written to the local SQLite queue immediately and marked
 // 'pending' — they do NOT require connectivity (SYNC-01/INV-06). runSync() is triggered
 // afterward as a best-effort attempt; if it fails, the record stays queued for the next
 // automatic sync pass.
 export default function StockTransactionScreen({ route, navigation }) {
-  const { item } = route.params;
   const { user } = useAuth();
+  // The route param is a snapshot from when the list was loaded; always show (and save
+  // against) the item's current row on this device, which a background sync may have updated.
+  const [item, setItem] = useState(route.params.item);
+  useFocusEffect(
+    useCallback(() => {
+      const current = getLocalItemByLocalId(route.params.item.localId);
+      if (current) setItem(current);
+    }, [route.params.item.localId])
+  );
   const [type, setType] = useState('out'); // default to recording a sale
   const [quantity, setQuantity] = useState('');
   const [unitPrice, setUnitPrice] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [amountPaidInput, setAmountPaidInput] = useState('');
+  const [customer, setCustomer] = useState(null); // { name, phone } who owes the balance
+  const [customerSheetOpen, setCustomerSheetOpen] = useState(false);
 
   const willDefaultPrice = type === 'out' && unitPrice.trim() === '';
   const defaultedPriceValue = item.lastPurchasePrice;
   const hasDefault = defaultedPriceValue !== null && defaultedPriceValue !== undefined;
+
+  function alertOutOfStock(current) {
+    Alert.alert('Out of stock', `${current.name} has no stock available, so it can't be sold. Record a stock-in first.`);
+  }
+
+  function alertNotEnough(current, available) {
+    Alert.alert(
+      'Not enough stock',
+      `Only ${formatNumber(available)} ${current.unit} of ${current.name} available. Reduce the quantity sold.`
+    );
+  }
 
   async function handleSave() {
     const qty = Number(quantity);
@@ -44,16 +80,16 @@ export default function StockTransactionScreen({ route, navigation }) {
       return;
     }
 
-    if (type === 'out' && item.quantityOnHand <= 0) {
-      Alert.alert('Out of stock', `${item.name} has no stock available, so it can't be sold. Record a stock-in first.`);
+    const current = getLocalItemByLocalId(item.localId) || item;
+    setItem(current);
+
+    if (type === 'out' && current.quantityOnHand <= 0) {
+      alertOutOfStock(current);
       return;
     }
 
-    if (type === 'out' && qty > item.quantityOnHand) {
-      Alert.alert(
-        'Not enough stock',
-        `Only ${formatNumber(item.quantityOnHand)} ${item.unit} of ${item.name} available. Reduce the quantity sold.`
-      );
+    if (type === 'out' && qty > current.quantityOnHand) {
+      alertNotEnough(current, current.quantityOnHand);
       return;
     }
 
@@ -62,42 +98,70 @@ export default function StockTransactionScreen({ route, navigation }) {
       return;
     }
 
-    if (type === 'out' && unitPrice.trim() === '' && !hasDefault) {
+    const currentDefault = current.lastPurchasePrice;
+    if (type === 'out' && unitPrice.trim() === '' && (currentDefault === null || currentDefault === undefined)) {
       Alert.alert('No price available', 'This item has no recorded purchase price to default to. Please enter a sale price.');
       return;
     }
 
     const priceWasDefaulted = type === 'out' && unitPrice.trim() === '';
-    const resolvedPrice = priceWasDefaulted ? defaultedPriceValue : Number(unitPrice);
+    const resolvedPrice = priceWasDefaulted ? currentDefault : Number(unitPrice);
+
+    // Part payment: blank = paid in full. Anything owed needs a customer to follow up with.
+    let amountPaid = null;
+    if (type === 'out' && amountPaidInput.trim() !== '') {
+      const saleTotal = Math.round(qty * resolvedPrice * 100) / 100;
+      const paid = Number(amountPaidInput);
+      if (!Number.isFinite(paid) || paid < 0) {
+        Alert.alert('Invalid amount', 'Amount paid must be zero or more.');
+        return;
+      }
+      if (paid > saleTotal + 0.005) {
+        Alert.alert('Amount too high', `The sale total is ${formatMoney(saleTotal)}. Amount paid can't be more than that.`);
+        return;
+      }
+      if (paid < saleTotal - 0.005) {
+        if (!customer) {
+          Alert.alert('Who is paying?', `${formatMoney(saleTotal - paid)} will be owed. Choose the customer from your contacts or enter their name and number.`, [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Add customer', onPress: () => setCustomerSheetOpen(true) },
+          ]);
+          return;
+        }
+        amountPaid = paid;
+      }
+    }
 
     const localTransaction = {
       clientTransactionId: uuidv4(),
-      itemLocalId: item.localId,
-      itemServerId: item.id, // may be null if the item itself hasn't synced yet
-      itemClientItemId: item.clientItemId,
+      itemLocalId: current.localId,
+      itemServerId: current.id, // may be null if the item itself hasn't synced yet
+      itemClientItemId: current.clientItemId,
       companyId: user.companyId,
       type,
       quantity: qty,
       unitPrice: resolvedPrice,
+      paymentMethod: type === 'out' ? paymentMethod : null,
+      amountPaid,
+      customerName: type === 'out' && customer ? customer.name : null,
+      customerPhone: type === 'out' && customer ? customer.phone : null,
       priceWasDefaulted,
       occurredAt: new Date().toISOString(),
       userId: user.id,
     };
 
-    // Reflect the change locally right away so the UI feels instant, regardless of
-    // connectivity (matches server-side quantity logic in routes/transactions.js).
-    const updatedQty =
-      type === 'in' ? item.quantityOnHand + qty
-      : type === 'out' ? item.quantityOnHand - qty
-      : qty; // adjustment sets an absolute value
-
-    const updatedItem = {
-      ...item,
-      quantityOnHand: updatedQty,
-      lastPurchasePrice: type === 'in' ? resolvedPrice : item.lastPurchasePrice,
-      userId: user.id,
-    };
-    saveLocalStockTransaction(localTransaction, updatedItem);
+    // Applied to the local balance right away, regardless of connectivity (same quantity rules
+    // as the server). The stock check is repeated inside the write against the current row.
+    try {
+      saveLocalStockTransaction(localTransaction);
+    } catch (err) {
+      const latest = getLocalItemByLocalId(current.localId) || current;
+      setItem(latest);
+      if (err.code === 'OUT_OF_STOCK') alertOutOfStock(latest);
+      else if (err.code === 'INSUFFICIENT_STOCK') alertNotEnough(latest, err.available);
+      else Alert.alert('Could not save', err.message);
+      return;
+    }
 
     // Best-effort immediate sync; safe to fail silently offline (SYNC-01/SYNC-05).
     runSync(user.id);
@@ -111,6 +175,10 @@ export default function StockTransactionScreen({ route, navigation }) {
     type === 'in' ? item.quantityOnHand + qty : type === 'out' ? item.quantityOnHand - qty : quantity === '' ? item.quantityOnHand : qty;
   const previewPrice = type === 'adjustment' ? null : unitPrice.trim() !== '' ? Number(unitPrice) : type === 'out' && hasDefault ? defaultedPriceValue : null;
   const totalLabel = type === 'in' ? 'Purchase total' : 'Sale total';
+  const previewTotal = previewPrice != null && qty > 0 ? previewPrice * qty : null;
+  const paidEntered = type === 'out' && amountPaidInput.trim() !== '' && Number.isFinite(Number(amountPaidInput));
+  const previewOwed = paidEntered && previewTotal != null ? Math.max(0, previewTotal - Number(amountPaidInput)) : 0;
+  const nothingPaid = paidEntered && Number(amountPaidInput) === 0;
 
   return (
     <Screen>
@@ -166,13 +234,58 @@ export default function StockTransactionScreen({ route, navigation }) {
             </View>
           )}
 
+          {type === 'out' && (
+            <View style={{ gap: 8 }}>
+              <Field
+                label="Amount paid"
+                optional
+                prefix="₦"
+                keyboardType="decimal-pad"
+                value={amountPaidInput}
+                onChangeText={setAmountPaidInput}
+                placeholder={previewTotal != null ? `Full amount (${formatMoney(previewTotal)})` : 'Full amount'}
+                hint="Leave blank if paid in full. Enter less for a part payment, or 0 if nothing was paid."
+                trailing={
+                  <IconButton
+                    icon="contacts"
+                    label={customer ? `Customer: ${customer.name}. Change` : 'Choose who is paying'}
+                    variant={customer ? 'soft' : 'ghost'}
+                    size={40}
+                    onPress={() => setCustomerSheetOpen(true)}
+                  />
+                }
+              />
+              {customer && (
+                <View style={styles.customerRow}>
+                  <Icon name="user" size={16} color={colors.ink2} />
+                  <Text style={styles.customerText} numberOfLines={1}>
+                    {customer.name} · {formatPhone(customer.phone)}
+                  </Text>
+                  <Button title="Remove" variant="ghost" height={32} onPress={() => setCustomer(null)} />
+                </View>
+              )}
+              {previewOwed > 0 && (
+                <Note kind={customer ? 'info' : 'warn'} icon={customer ? 'info' : 'alert'}>
+                  {formatMoney(previewOwed)} will be owed{customer ? ` by ${customer.name}` : '. Tap the contact button to choose who is paying.'}
+                </Note>
+              )}
+            </View>
+          )}
+
+          {type === 'out' && !nothingPaid && (
+            <View style={{ gap: 8 }}>
+              <Text style={typo.label}>{paidEntered && previewOwed > 0 ? 'Part payment made by' : 'Payment'}</Text>
+              <Segmented accessibilityLabel="Payment method" options={PAYMENT_METHODS} value={paymentMethod} onChange={setPaymentMethod} />
+            </View>
+          )}
+
           {type === 'adjustment' && (
             <Note>An adjustment sets the stock to the number you counted. The difference is kept for the discrepancy report.</Note>
           )}
 
           <View style={{ flexDirection: 'row', gap: 12 }}>
             <Stat label={type === 'out' ? 'Stock after sale' : 'Stock after'} value={`${formatNumber(previewQty)} ${item.unit}`} />
-            {previewPrice != null && qty > 0 && <Stat align="right" label={totalLabel} value={formatMoney(previewPrice * qty)} />}
+            {previewTotal != null && <Stat align="right" label={totalLabel} value={formatMoney(previewTotal)} />}
           </View>
           {type === 'out' && item.quantityOnHand <= 0 ? (
             <Note kind="error" icon="alert">This item is out of stock and can't be sold. Record a stock-in first.</Note>
@@ -186,6 +299,15 @@ export default function StockTransactionScreen({ route, navigation }) {
           <Text style={[typo.caption, { textAlign: 'center' }]}>Saved on this device first, then synced automatically.</Text>
         </BottomBar>
       </KeyboardAvoidingView>
+      <CustomerSheet
+        visible={customerSheetOpen}
+        initial={customer}
+        onClose={() => setCustomerSheetOpen(false)}
+        onSave={(c) => {
+          setCustomer(c);
+          setCustomerSheetOpen(false);
+        }}
+      />
     </Screen>
   );
 }
@@ -195,4 +317,6 @@ const styles = StyleSheet.create({
   itemRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   itemIcon: { width: 44, height: 44, borderRadius: 12, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
   itemName: { fontFamily: fonts.semibold, fontSize: 16 },
+  customerRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 4 },
+  customerText: { flex: 1, fontFamily: fonts.medium, fontSize: 14, color: colors.ink2 },
 });

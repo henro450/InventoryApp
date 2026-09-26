@@ -21,6 +21,30 @@ export function formatDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+// Calendar dates chosen in date fields are kept as 'YYYY-MM-DD' in the phone's local time.
+export function dateToYmd(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+export function ymdToDate(ymd) {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+// A picked date range covers whole days on this phone: from the start of the first day to the
+// end of the last day (so choosing today as "To" includes everything recorded today).
+export function rangeBounds({ from, to } = {}) {
+  const start = from ? ymdToDate(from) : null;
+  const end = to ? ymdToDate(to) : null;
+  if (end) end.setHours(23, 59, 59, 999);
+  return { from: start ? start.toISOString() : '', to: end ? end.toISOString() : '' };
+}
+
+export function formatYmd(ymd) {
+  return ymd ? ymdToDate(ymd).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+}
+
 export function formatDateTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);

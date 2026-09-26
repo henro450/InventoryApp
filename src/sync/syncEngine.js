@@ -11,7 +11,13 @@ import {
   setLastSyncedAt,
   upsertLocalItem,
   hasPendingItemWork,
-  purgeOldSyncedTransactions,
+  upsertPulledTransaction,
+  deletePulledTransaction,
+  upsertLocalCompany,
+  upsertPulledDebtPayment,
+  deferItemChange,
+  getDeferredChanges,
+  removeDeferredChange,
 } from '../db/localDb';
 
 let syncInProgress = false;
@@ -19,6 +25,83 @@ let syncInProgress = false;
 // NFR-07: a huge pending queue is pushed in fixed-size chunks rather than one giant request,
 // so a large offline backlog can't produce a single oversized/slow/failure-prone payload.
 const BATCH_SIZE = 50;
+
+// Screens showing locally computed data (reports, dashboard) subscribe so they refresh as soon
+// as a sync pushes or pulls anything, without waiting for a pull-to-refresh.
+const syncListeners = new Set();
+export function subscribeToSync(listener) {
+  syncListeners.add(listener);
+  return () => syncListeners.delete(listener);
+}
+
+function notifySyncListeners(result) {
+  for (const listener of syncListeners) {
+    try {
+      listener(result);
+    } catch {
+      // a screen's refresh failing must never break syncing
+    }
+  }
+}
+
+function itemLocalId(item) {
+  return item.clientItemId || `server-${item.id}`;
+}
+
+function applyItemChange(operation, item, userId) {
+  upsertLocalItem({
+    id: item.id,
+    localId: itemLocalId(item),
+    clientItemId: item.clientItemId,
+    sku: item.sku,
+    name: item.name,
+    category: item.category,
+    unit: item.unit,
+    companyId: item.companyId,
+    quantityOnHand: item.quantityOnHand,
+    lowStockThreshold: item.lowStockThreshold,
+    lastPurchasePrice: item.lastPurchasePrice,
+    version: item.version,
+    updatedAt: item.updatedAt,
+    syncStatus: 'synced',
+    userId,
+    isActive: operation === 'delete' ? false : item.isActive,
+  });
+}
+
+// The feed carries companies, items, stock transactions, and debt repayments for every company
+// this user can see. All are kept so reports, debtors, alerts, and the dashboard can be computed
+// on the device.
+function applyChange(change, userId) {
+  if (!change.data) return;
+  if (change.entityType === 'company') {
+    upsertLocalCompany(change.data, { deleted: change.operation === 'delete' });
+  } else if (change.entityType === 'debt_payment') {
+    upsertPulledDebtPayment(change.data, userId);
+  } else if (change.entityType === 'stock_transaction') {
+    if (change.operation === 'delete') deletePulledTransaction(change.data.clientTransactionId);
+    else upsertPulledTransaction(change.data, userId);
+  } else if (change.entityType === 'item') {
+    const localId = itemLocalId(change.data);
+    // The local row reflects edits or stock movements the server hasn't received yet, so it
+    // isn't overwritten now. The server's latest version is kept and applied once that work
+    // has been pushed (applyDeferredChanges), rather than dropped as the cursor moves on.
+    if (hasPendingItemWork(localId, change.data.id)) {
+      deferItemChange(localId, userId, change.operation, change.data);
+      return;
+    }
+    removeDeferredChange(localId);
+    applyItemChange(change.operation, change.data, userId);
+  }
+}
+
+function applyDeferredChanges(userId) {
+  for (const deferred of getDeferredChanges(userId)) {
+    if (hasPendingItemWork(deferred.localId, deferred.data.id)) continue;
+    applyItemChange(deferred.operation, deferred.data, userId);
+    removeDeferredChange(deferred.localId);
+  }
+}
 
 // Pushes the durable outbox first, then advances an ordered PostgreSQL change cursor. Both
 // directions are retry-safe: operation receipts dedupe uploads and sequence cursors cannot
@@ -67,46 +150,19 @@ export async function runSync(userId) {
     let hasMore;
     do {
       const page = await api.syncChanges(cursor, 500);
-      for (const change of page.changes) {
-        if (change.entityType !== 'item' || !change.data) continue;
-        const item = change.data;
-        const localId = item.clientItemId || `server-${item.id}`;
-        if (hasPendingItemWork(localId, item.id)) continue;
-
-        upsertLocalItem({
-          id: item.id,
-          localId,
-          clientItemId: item.clientItemId,
-          sku: item.sku,
-          name: item.name,
-          category: item.category,
-          unit: item.unit,
-          companyId: item.companyId,
-          quantityOnHand: item.quantityOnHand,
-          lowStockThreshold: item.lowStockThreshold,
-          lastPurchasePrice: item.lastPurchasePrice,
-          version: item.version,
-          updatedAt: item.updatedAt,
-          syncStatus: 'synced',
-          userId,
-          isActive: change.operation === 'delete' ? false : item.isActive,
-        });
-      }
+      for (const change of page.changes) applyChange(change, userId);
       cursor = page.cursor;
       setSyncCursor(userId, cursor);
       pulledChanges += page.changes.length;
       hasMore = page.hasMore;
     } while (hasMore);
 
+    applyDeferredChanges(userId);
     setLastSyncedAt(userId, new Date().toISOString());
-    purgeOldSyncedTransactions(); // NFR-06: prune old synced history now that sync succeeded
 
-    return {
-      success: true,
-      operationsSynced,
-      pulledChanges,
-      cursor,
-    };
+    const result = { success: true, operationsSynced, pulledChanges, cursor };
+    if (operationsSynced > 0 || pulledChanges > 0) notifySyncListeners(result);
+    return result;
   } catch (err) {
     return { error: err.message };
   } finally {

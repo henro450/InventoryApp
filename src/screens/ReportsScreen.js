@@ -1,37 +1,47 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, ScrollView, StyleSheet, Alert, Pressable, RefreshControl } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
-import { getLastSyncedAt } from '../db/localDb';
+import { getLastSyncedAt, getCached, setCached } from '../db/localDb';
+import { getCompanyReports, getOversightSummary } from '../reports/localReports';
+import { useLocalRefresh } from '../hooks/useLocalRefresh';
+import LocalDataNotice from '../components/LocalDataNotice';
 import { exportCsv } from '../utils/csvExport';
-import { formatDate, formatDateTime, formatMoney, formatNumber, lastSyncedLabel } from '../utils/format';
+import { runSync } from '../sync/syncEngine';
+import { formatDate, formatDateTime, formatMoney, formatNumber, formatYmd, lastSyncedLabel, plural, rangeBounds, dateToYmd } from '../utils/format';
 import Icon from '../components/Icon';
 import PriceTrendChart from '../components/PriceTrendChart';
 import {
-  Text, Screen, LargeHeader, NavHeader, IconButton, AccountButton, Card, SectionTitle, Chip, Field, Button, Banner,
+  Text, Screen, LargeHeader, NavHeader, IconButton, AccountButton, Card, SectionTitle, Chip, Field, DateField, Button,
   KV, BarRow, Divider, InlineEmpty, Loading, CompanySwitcher, ReadOnlyBanner,
 } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
 const PREVIEW_ROWS = 5;
+const PAYMENT_LABEL = { cash: 'Cash', transfer: 'Transfer', credit: 'Not yet paid (credit)' };
 
 // RPT-01, RPT-02, RPT-03, RPT-04, PRC-04: stock on hand (item/category filter), sales vs
 // purchases (date range filter), margin by item/category/Sub Company, per-transaction margin
-// (historical PriceHistory cost basis), discrepancy report (expected vs counted stock), and
-// price trend for a selected item. RPT-05 export is CSV only — no PDF/Excel, which would need
-// new heavyweight dependencies this project has otherwise avoided throughout.
+// (historical cost basis), discrepancy report (expected vs counted stock), and price trend for
+// a selected item. RPT-05 export is CSV only — no PDF/Excel, which would need new heavyweight
+// dependencies this project has otherwise avoided throughout.
+// Every report is computed on the device from the local database (src/reports/localReports.js),
+// so it works offline and includes this phone's unsynced changes. Only the scheduled snapshots
+// come from the server; the last copy is kept for offline viewing.
 export default function ReportsScreen({ route, navigation }) {
   const { user, isMainCompany, logout } = useAuth();
   const companyId = route?.params?.companyId || user.companyId;
   const companyLabel = route?.params?.companyName;
   const isOwnCompany = companyId === user.companyId;
   const lastSynced = getLastSyncedAt(user.id);
+  const snapshotCacheKey = `snapshots:${companyId}`;
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(null);
+  const [snapshotsSavedAt, setSnapshotsSavedAt] = useState(null); // set when showing a saved (offline) copy
   const [stockOnHand, setStockOnHand] = useState([]);
   const [salesVsPurchases, setSalesVsPurchases] = useState(null);
+  const [debtors, setDebtors] = useState(null);
   const [marginByItem, setMarginByItem] = useState([]);
   const [transactionMargins, setTransactionMargins] = useState([]);
   const [marginByCompany, setMarginByCompany] = useState(null);
@@ -48,46 +58,54 @@ export default function ReportsScreen({ route, navigation }) {
   const [fromInput, setFromInput] = useState('');
   const [toInput, setToInput] = useState('');
   const [dateError, setDateError] = useState(null);
+  const today = dateToYmd(new Date());
   const [appliedFilters, setAppliedFilters] = useState({ category: '', itemId: null, itemName: '', from: '', to: '' });
   const [expanded, setExpanded] = useState({});
 
-  async function load(filters = appliedFilters) {
-    setError(null);
+  function loadLocal(filters) {
+    const range = rangeBounds(filters);
+    const reports = getCompanyReports(user, companyId, { ...filters, ...range });
+    setStockOnHand(reports.stockOnHand);
+    setSalesVsPurchases(reports.salesVsPurchases);
+    setDebtors(reports.debtors);
+    setMarginByItem(reports.marginByItem);
+    setItems(reports.items);
+    setTransactionMargins(reports.transactionMargins);
+    setDiscrepancies(reports.discrepancies);
+    setPriceTrend(reports.priceTrend);
+    setMarginByCompany(isMainCompany && isOwnCompany ? getOversightSummary(user, range).companies : null);
+    setLoading(false);
+  }
+
+  async function loadSnapshots() {
     try {
-      const calls = [
-        api.getStockOnHandReport(companyId, { category: filters.category, itemId: filters.itemId }),
-        api.getSalesVsPurchases(companyId, { from: filters.from, to: filters.to }),
-        api.getMarginByItem(companyId),
-        api.getItems(companyId),
-        api.getTransactionMargins(companyId, { itemId: filters.itemId, from: filters.from, to: filters.to, limit: 50 }),
-        api.getDiscrepancies(companyId, { from: filters.from, to: filters.to }),
-        filters.itemId ? api.getPriceTrend(companyId, { itemId: filters.itemId }) : Promise.resolve({ history: [] }),
-        isMainCompany ? api.getOversightSummary({ from: filters.from, to: filters.to }) : Promise.resolve(null),
-        api.getReportSnapshots(companyId, { limit: 20 }),
-      ];
-      const [stock, svp, margin, itemsResp, txMargins, discrepancyResp, trendResp, summaryResp, snapshotResp] = await Promise.all(calls);
-      setStockOnHand(stock.items);
-      setSalesVsPurchases(svp);
-      setMarginByItem(margin.report);
-      setItems(itemsResp.items);
-      setTransactionMargins(txMargins.transactions);
-      setDiscrepancies(discrepancyResp.discrepancies);
-      setPriceTrend(trendResp.history);
-      setMarginByCompany(summaryResp ? summaryResp.companies : null);
-      setSnapshots(snapshotResp.snapshots);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+      const { snapshots: fresh } = await api.getReportSnapshots(companyId, { limit: 20 });
+      setSnapshots(fresh);
+      setSnapshotsSavedAt(null);
+      setCached(snapshotCacheKey, fresh);
+    } catch {
+      const saved = getCached(snapshotCacheKey);
+      setSnapshots(saved ? saved.data : []);
+      setSnapshotsSavedAt(saved ? saved.savedAt : 'never');
     }
   }
 
+  function load(filters = appliedFilters) {
+    loadLocal(filters);
+    return loadSnapshots();
+  }
+
+  // Recompute on focus and after every background sync, with the filters currently applied.
+  const filtersRef = useRef(appliedFilters);
+  filtersRef.current = appliedFilters;
+  useLocalRefresh(() => loadLocal(filtersRef.current));
   useEffect(() => {
-    load();
+    loadSnapshots();
   }, [companyId]);
 
   async function handleRefresh() {
     setRefreshing(true);
+    await runSync(user.id);
     await load();
     setRefreshing(false);
   }
@@ -99,22 +117,18 @@ export default function ReportsScreen({ route, navigation }) {
   }
 
   function handleApplyFilters() {
-    if (fromInput && isNaN(Date.parse(fromInput))) {
-      setDateError('Invalid "from" date — use YYYY-MM-DD');
-      return;
-    }
-    if (toInput && isNaN(Date.parse(toInput))) {
-      setDateError('Invalid "to" date — use YYYY-MM-DD');
+    if (fromInput && toInput && fromInput > toInput) {
+      setDateError('"From" must be on or before "To".');
       return;
     }
     setDateError(null);
     setFiltersOpen(false);
     applyFilters({
       category: categoryInput.trim(),
-      itemId: selectedItem?.id || null,
+      itemId: selectedItem?.localId || null,
       itemName: selectedItem?.name || '',
-      from: fromInput.trim(),
-      to: toInput.trim(),
+      from: fromInput,
+      to: toInput,
     });
   }
 
@@ -158,10 +172,9 @@ export default function ReportsScreen({ route, navigation }) {
     setGeneratingSnapshot(true);
     try {
       await api.generateReportSnapshot(companyId);
-      const { snapshots: fresh } = await api.getReportSnapshots(companyId, { limit: 20 });
-      setSnapshots(fresh);
+      await loadSnapshots();
     } catch (err) {
-      Alert.alert('Could not generate report', err.message);
+      Alert.alert('Could not generate report', err.status ? err.message : 'Snapshots are created on the server. Connect to the internet and try again.');
     } finally {
       setGeneratingSnapshot(false);
     }
@@ -236,9 +249,21 @@ export default function ReportsScreen({ route, navigation }) {
 
   const svp = salesVsPurchases;
   const svpMax = svp ? Math.max(svp.totalSalesRevenue, svp.totalPurchaseCost, 1) : 1;
+  const paymentRows = svp
+    ? ['cash', 'transfer', 'credit'].map((key) => {
+        const bucket = svp.salesByPaymentMethod[key];
+        return {
+          key,
+          method: PAYMENT_LABEL[key],
+          count: bucket.count,
+          revenue: bucket.revenue,
+          share: svp.totalSalesRevenue > 0 ? (bucket.revenue / svp.totalSalesRevenue) * 100 : 0,
+        };
+      })
+    : [];
   const companyMax = marginByCompany ? Math.max(0, ...marginByCompany.map((c) => c.margin)) : 0;
   const dateLabel =
-    appliedFilters.from || appliedFilters.to ? `${appliedFilters.from || 'Start'} – ${appliedFilters.to || 'Today'}` : null;
+    appliedFilters.from || appliedFilters.to ? `${formatYmd(appliedFilters.from) || 'Start'} – ${formatYmd(appliedFilters.to) || 'Today'}` : null;
 
   return (
     <Screen>
@@ -248,15 +273,7 @@ export default function ReportsScreen({ route, navigation }) {
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
       >
-        {error && (
-          <Banner
-            kind="error"
-            title="Couldn't reach the latest data"
-            subtitle={`Reports need an internet connection. ${error}`}
-            actionLabel="Retry"
-            onAction={handleRefresh}
-          />
-        )}
+        <LocalDataNotice user={user} onSynced={() => loadLocal(appliedFilters)} />
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterChips} style={styles.filterScroll}>
           <Chip label="Filters" icon={filtersOpen ? 'chevup' : 'filter'} active={filtersOpen} onPress={() => setFiltersOpen((o) => !o)} />
@@ -280,7 +297,7 @@ export default function ReportsScreen({ route, navigation }) {
                   <Field value={itemSearchText} onChangeText={setItemSearchText} placeholder="Search by name or SKU" leadingIcon="search" accessibilityLabel="Item" />
                   {itemMatches.slice(0, 5).map((i) => (
                     <Pressable
-                      key={i.id}
+                      key={i.localId}
                       accessibilityRole="button"
                       style={styles.match}
                       onPress={() => {
@@ -296,8 +313,8 @@ export default function ReportsScreen({ route, navigation }) {
               )}
             </View>
             <View style={{ flexDirection: 'row', gap: 10 }}>
-              <Field style={{ flex: 1 }} label="From" value={fromInput} onChangeText={setFromInput} placeholder="YYYY-MM-DD" />
-              <Field style={{ flex: 1 }} label="To" value={toInput} onChangeText={setToInput} placeholder="YYYY-MM-DD" />
+              <DateField style={{ flex: 1 }} label="From" value={fromInput} onChange={setFromInput} placeholder="Start" maximumDate={toInput || today} />
+              <DateField style={{ flex: 1 }} label="To" value={toInput} onChange={setToInput} placeholder="Today" minimumDate={fromInput || undefined} maximumDate={today} />
             </View>
             {dateError && <Text style={styles.error}>{dateError}</Text>}
             <Button title="Apply filters" variant="dark" height={48} onPress={handleApplyFilters} />
@@ -337,6 +354,99 @@ export default function ReportsScreen({ route, navigation }) {
             </>
           ) : (
             <InlineEmpty>No data available.</InlineEmpty>
+          )}
+        </Card>
+
+        <Card padding={18} gap={14}>
+          <SectionTitle
+            title="Sales by payment method"
+            right={exportButton('sales by payment method', () =>
+              handleExport('sales-by-payment-method.csv', paymentRows, [
+                { key: 'method', label: 'Payment Method' },
+                { key: 'count', label: 'Sales' },
+                { key: 'revenue', label: 'Revenue' },
+                { key: 'share', label: 'Share of Revenue (%)' },
+              ])
+            )}
+          />
+          {!svp || svp.saleCount === 0 ? (
+            <InlineEmpty>No sales recorded{dateLabel ? ' in this period' : ' yet'}.</InlineEmpty>
+          ) : (
+            <>
+              {paymentRows.map((row) => (
+                <View key={row.key} style={{ gap: 6 }}>
+                  <View style={styles.payRow}>
+                    <Text style={styles.payName}>{row.method}</Text>
+                    <Text style={styles.payValue}>{formatMoney(row.revenue)}</Text>
+                  </View>
+                  <View style={styles.payTrack}>
+                    <View
+                      style={[
+                        styles.payFill,
+                        { width: `${row.share}%`, backgroundColor: row.key === 'cash' ? colors.ok : row.key === 'transfer' ? colors.primary : colors.danger },
+                      ]}
+                    />
+                  </View>
+                  <Text style={type.caption}>
+                    {plural(row.count, 'sale')} · {row.share.toFixed(1)}% of sales revenue
+                  </Text>
+                </View>
+              ))}
+              {svp.repayments.total > 0 && (
+                <>
+                  <Divider />
+                  <KV label="Debt repayments received" value={formatMoney(svp.repayments.total)} valueColor={colors.ok} />
+                  <Text style={type.caption}>
+                    Cash {formatMoney(svp.repayments.cash.amount)} · Transfer {formatMoney(svp.repayments.transfer.amount)}
+                  </Text>
+                </>
+              )}
+              <Text style={type.caption}>
+                Cash and Transfer are what was paid at the time of sale; the rest is owed by customers. Sales recorded before payment
+                methods were added count as cash.
+              </Text>
+            </>
+          )}
+        </Card>
+
+        <Card padding={18} gap={12}>
+          <SectionTitle
+            title="Money owed by customers"
+            right={
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => navigation.navigate('Debtors', isOwnCompany ? {} : { companyId, companyName: companyLabel })}
+                style={styles.showAll}
+              >
+                <Text style={styles.link}>View all</Text>
+              </Pressable>
+            }
+          />
+          {!debtors || debtors.customers.length === 0 ? (
+            <InlineEmpty>No part-paid or credit sales yet.</InlineEmpty>
+          ) : (
+            <>
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={type.caption}>Outstanding</Text>
+                  <Text style={[styles.bigNum, debtors.totals.outstanding > 0 && { color: colors.danger }]} adjustsFontSizeToFit numberOfLines={1}>
+                    {formatMoney(debtors.totals.outstanding)}
+                  </Text>
+                </View>
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={type.caption}>Customers owing</Text>
+                  <Text style={styles.bigNum}>{formatNumber(debtors.totals.customersOwing)}</Text>
+                </View>
+              </View>
+              {debtors.customers
+                .filter((c) => c.balance > 0)
+                .slice(0, 3)
+                .map((c) => (
+                  <KV key={c.customerPhone} label={c.customerName} value={formatMoney(c.balance)} valueColor={colors.danger} />
+                ))}
+              <KV label="Repaid so far (all time)" value={formatMoney(debtors.totals.totalRepaid)} />
+              <Text style={type.caption}>Balances are all-time; they aren't affected by the date filter.</Text>
+            </>
           )}
         </Card>
 
@@ -386,7 +496,7 @@ export default function ReportsScreen({ route, navigation }) {
               rows={limited('stock', stockOnHand).map((item) => {
                 const low = item.quantityOnHand <= item.lowStockThreshold;
                 return {
-                  key: item.id,
+                  key: item.localId,
                   cells: [item.name, { text: `${formatNumber(item.quantityOnHand)} ${item.unit}`, color: low ? colors.danger : undefined }, formatNumber(item.lowStockThreshold)],
                 };
               })}
@@ -468,6 +578,9 @@ export default function ReportsScreen({ route, navigation }) {
                 { key: 'occurredAt', label: 'Date' },
                 { key: 'quantity', label: 'Quantity' },
                 { key: 'unitPrice', label: 'Sale Price' },
+                { key: 'paymentMethod', label: 'Payment Method' },
+                { key: 'amountPaid', label: 'Amount Paid' },
+                { key: 'customerName', label: 'Customer (if owed)' },
                 { key: 'estimatedCost', label: 'Estimated Cost' },
                 { key: 'estimatedMargin', label: 'Estimated Margin' },
               ])
@@ -483,7 +596,13 @@ export default function ReportsScreen({ route, navigation }) {
               rows={limited('tx', transactionMargins).map((tx) => ({
                 key: tx.transactionId,
                 cells: [
-                  { text: `${tx.itemName || 'Unknown item'} × ${formatNumber(tx.quantity)}`, sub: formatDate(tx.occurredAt) },
+                  {
+                    text: `${tx.itemName || 'Unknown item'} × ${formatNumber(tx.quantity)}`,
+                    sub:
+                      tx.amountPaid < tx.revenue - 0.005
+                        ? `${formatDate(tx.occurredAt)} · ${tx.amountPaid > 0 ? 'Part-paid' : 'On credit'}${tx.customerName ? ` · ${tx.customerName}` : ''}`
+                        : `${formatDate(tx.occurredAt)} · ${PAYMENT_LABEL[tx.paymentMethod]}`,
+                  },
                   formatMoney(tx.unitPrice),
                   tx.costAvailable
                     ? { text: formatMoney(tx.estimatedMargin), color: tx.estimatedMargin >= 0 ? colors.ok : colors.danger }
@@ -566,6 +685,13 @@ export default function ReportsScreen({ route, navigation }) {
           <Text style={[type.caption, { marginTop: -6 }]}>
             A summary is generated automatically once a day and appears here. There is no email or push delivery.
           </Text>
+          {snapshotsSavedAt && (
+            <Text style={type.caption}>
+              {snapshotsSavedAt === 'never'
+                ? 'Offline · snapshots load once you’re connected.'
+                : `Offline · saved copy from ${formatDateTime(snapshotsSavedAt)}.`}
+            </Text>
+          )}
           {snapshots.length === 0 ? (
             <InlineEmpty>No automatic reports generated yet.</InlineEmpty>
           ) : (
@@ -580,6 +706,12 @@ export default function ReportsScreen({ route, navigation }) {
                       <Text style={type.caption}>
                         {formatNumber(s.itemCount)} items · {formatNumber(s.lowStockCount)} low · {formatMoney(s.totalSalesRevenue)} sales
                       </Text>
+                      {Number(s.totalSalesRevenue) > 0 && (
+                        <Text style={type.caption}>
+                          Cash {formatMoney(s.cashSalesRevenue)} · Transfer {formatMoney(s.transferSalesRevenue)}
+                        </Text>
+                      )}
+                      {Number(s.outstandingDebt) > 0 && <Text style={type.caption}>Owed by customers {formatMoney(s.outstandingDebt)}</Text>}
                     </View>
                     <Text style={[styles.snapMargin, { color: s.margin >= 0 ? colors.ok : colors.danger }]}>{formatMoney(s.margin)}</Text>
                   </View>
@@ -643,6 +775,11 @@ const styles = StyleSheet.create({
   csvText: { fontFamily: fonts.semibold, fontSize: 12, color: colors.ink2 },
   bigNum: { fontFamily: fonts.display, fontSize: 24, letterSpacing: -0.5 },
   svpBar: { height: 10, borderRadius: 5, minWidth: 4 },
+  payRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 },
+  payName: { fontFamily: fonts.semibold, fontSize: 15 },
+  payValue: { fontFamily: fonts.semibold, fontSize: 16, fontVariant: ['tabular-nums'] },
+  payTrack: { height: 8, borderRadius: 4, backgroundColor: colors.surfaceMuted, overflow: 'hidden' },
+  payFill: { height: 8, borderRadius: 4 },
   tiles: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   catTile: { flexBasis: '47%', flexGrow: 1, padding: 12, borderRadius: 14, backgroundColor: colors.surfaceMuted, gap: 3 },
   catValue: { fontFamily: fonts.semibold, fontSize: 16, fontVariant: ['tabular-nums'] },

@@ -29,7 +29,19 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to scan item barcodes."
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow $(PRODUCT_NAME) to use Face ID to log you in."
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow $(PRODUCT_NAME) to open your contacts so you can pick the customer who is paying part of a sale."
+        }
+      ]
     ],
     "extra": {
       "eas": {

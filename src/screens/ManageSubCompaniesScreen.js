@@ -2,6 +2,9 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { View, FlatList, StyleSheet, Alert, RefreshControl } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../api/client';
+import { getCached, setCached, getLocalSubCompanies } from '../db/localDb';
+import { useAuth } from '../context/AuthContext';
+import { formatDateTime } from '../utils/format';
 import {
   Text, Screen, NavHeader, IconButton, SearchField, Card, LetterTile, Pill, Button, Banner, EmptyState, Loading,
   Field, Sheet,
@@ -10,7 +13,12 @@ import { colors, fonts, type } from '../theme';
 
 const EMPTY_FORM = { companyName: '', email: '' };
 
+// Adding, renaming, deactivating and invites are done on the server, so they need a connection.
+// Offline, the screen shows the last list it loaded (or the companies synced to this phone).
 export default function ManageSubCompaniesScreen() {
+  const { user } = useAuth();
+  const cacheKey = `subCompanies:${user.companyId}`;
+  const [savedAt, setSavedAt] = useState(null);
   const [subCompanies, setSubCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -32,10 +40,28 @@ export default function ManageSubCompaniesScreen() {
     setError(null);
     return api
       .getMyCompany()
-      .then(({ subCompanies: subs }) => setSubCompanies(subs))
-      .catch((err) => setError(err.message))
+      .then(({ subCompanies: subs }) => {
+        setSubCompanies(subs);
+        setSavedAt(null);
+        setCached(cacheKey, subs);
+      })
+      .catch((err) => {
+        const saved = getCached(cacheKey);
+        if (saved) {
+          setSubCompanies(saved.data);
+          setSavedAt(saved.savedAt);
+          return;
+        }
+        const synced = getLocalSubCompanies(user.companyId);
+        if (synced.length) {
+          setSubCompanies(synced);
+          setSavedAt('synced');
+          return;
+        }
+        setError(err.message);
+      })
       .finally(() => setLoading(false));
-  }, []);
+  }, [cacheKey, user.companyId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -177,6 +203,16 @@ export default function ManageSubCompaniesScreen() {
               login and inventory.
             </Text>
             {error && <Banner kind="error" title="Couldn't load Sub Companies" subtitle={`Are you offline? ${error}`} actionLabel="Retry" onAction={handleRefresh} />}
+            {savedAt && (
+              <Banner
+                kind="info"
+                icon="cloud"
+                title="Offline · adding or changing Sub Companies needs a connection"
+                subtitle={savedAt === 'synced' ? 'Showing the companies synced to this phone.' : `Showing the list saved ${formatDateTime(savedAt)}.`}
+                actionLabel="Retry"
+                onAction={handleRefresh}
+              />
+            )}
             {subCompanies.length > 3 && <SearchField value={query} onChangeText={setQuery} placeholder="Search sub companies" />}
           </View>
         }

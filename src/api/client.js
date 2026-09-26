@@ -6,6 +6,8 @@ export const API_BASE_URL = (
   process.env.EXPO_PUBLIC_API_URL || 'https://inventryapi.onrender.com/api'
 ).replace(/\/+$/, '');
 
+const REQUEST_TIMEOUT_MS = 15000;
+
 async function getToken() {
   return SecureStore.getItemAsync('authToken');
 }
@@ -24,11 +26,27 @@ async function request(path, { method = 'GET', body, auth = true } = {}) {
     if (token) headers.Authorization = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  // A bad connection can leave fetch hanging for minutes; give up after 15s so screens fall
+  // back to the data on this phone instead of spinning. Network failures carry no `status`.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    throw new Error(
+      err.name === 'AbortError'
+        ? 'The server took too long to respond. Check your connection and try again.'
+        : "Couldn't reach the server. Check your internet connection."
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -38,6 +56,7 @@ async function request(path, { method = 'GET', body, auth = true } = {}) {
     }
     const err = new Error(data.error || `Request failed with status ${res.status}`);
     err.status = res.status;
+    if (data.code) err.code = data.code;
     throw err;
   }
   return data;
@@ -49,6 +68,11 @@ export const api = {
   getPasswordToken: (token) => request(`/auth/password-token?token=${encodeURIComponent(token)}`, { auth: false }),
   setPassword: (payload) => request('/auth/set-password', { method: 'POST', body: payload, auth: false }),
   forgotPassword: (email) => request('/auth/forgot-password', { method: 'POST', body: { email }, auth: false }),
+
+  // Fingerprint login (see src/auth/biometrics.js).
+  registerBiometric: (deviceName) => request('/auth/biometric/register', { method: 'POST', body: { deviceName } }),
+  biometricLogin: (deviceToken) => request('/auth/biometric/login', { method: 'POST', body: { deviceToken }, auth: false }),
+  revokeBiometric: (deviceToken) => request('/auth/biometric/revoke', { method: 'POST', body: { deviceToken }, auth: false }),
 
   // SuperAdmin: profiling Main Companies.
   adminListCompanies: () => request('/admin/companies'),

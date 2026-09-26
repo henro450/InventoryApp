@@ -1,11 +1,11 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, FlatList, Pressable, StyleSheet, RefreshControl, Alert } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '../context/AuthContext';
-import { getLocalItems, getSyncStatusSummary, saveLocalItem, deleteLocalItem, getLastSyncedAt } from '../db/localDb';
+import { getLocalItems, getSyncStatusSummary, saveLocalItem, deleteLocalItem, getLastSyncedAt, getItemIdsWithPendingWork } from '../db/localDb';
+import { useLocalRefresh } from '../hooks/useLocalRefresh';
 import { runSync } from '../sync/syncEngine';
 import { isLowStock } from '../utils/inventory';
 import { exportCsv, pickAndParseCsv } from '../utils/csvExport';
@@ -40,15 +40,13 @@ export default function InventoryScreen({ navigation, route }) {
   const [query, setQuery] = useState('');
 
   const loadLocal = useCallback(() => {
-    setItems(getLocalItems(viewingCompanyId));
+    const pendingIds = getItemIdsWithPendingWork(user.id);
+    setItems(getLocalItems(viewingCompanyId).map((i) => ({ ...i, hasPendingWork: pendingIds.has(i.localId) })));
     setSyncSummary(getSyncStatusSummary(user.id));
   }, [viewingCompanyId, user.id]);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadLocal();
-    }, [loadLocal])
-  );
+  // On focus and after every background sync, so quantities pulled from other devices appear.
+  useLocalRefresh(loadLocal);
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -280,7 +278,8 @@ function ItemRow({ item, editable, onPress, onEdit, onDeactivate, onMore }) {
   const swipeRef = useRef(null);
   const low = isLowStock(item);
   const conflict = item.syncStatus === 'conflict';
-  const waiting = item.syncStatus === 'pending' || item.syncStatus === 'failed';
+  // Includes items whose only unsynced change is a stock movement.
+  const waiting = !conflict && (item.syncStatus === 'pending' || item.syncStatus === 'failed' || item.hasPendingWork);
 
   const body = (
     <Pressable
