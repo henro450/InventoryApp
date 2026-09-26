@@ -41,6 +41,17 @@
         {
           "contactsPermission": "Allow $(PRODUCT_NAME) to open your contacts so you can pick the customer who is paying part of a sale."
         }
+      ],
+      [
+        "expo-notifications",
+        {}
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to photograph receipts for proof of payment.",
+          "photosPermission": false
+        }
       ]
     ],
     "extra": {

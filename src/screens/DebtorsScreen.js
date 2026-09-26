@@ -9,7 +9,7 @@ import { formatDate, formatMoney, plural } from '../utils/format';
 import { formatPhone } from '../utils/phone';
 import Icon from '../components/Icon';
 import LocalDataNotice from '../components/LocalDataNotice';
-import { Text, Screen, NavHeader, IconButton, SearchField, Chip, Card, LetterTile, EmptyState, Loading } from '../components/ui';
+import { Text, Screen, NavHeader, LargeHeader, IconButton, AccountButton, SearchField, Chip, Card, LetterTile, EmptyState, Loading } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
 const FILTERS = [
@@ -22,7 +22,8 @@ const FILTERS = [
 // phone's data (works offline, includes unsynced sales and payments). A Main Company can open a
 // Sub Company's list read-only with route.params.companyId.
 export default function DebtorsScreen({ navigation, route }) {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
+  const asTab = !!route?.params?.asTab;
   const companyId = route?.params?.companyId || user.companyId;
   const companyName = route?.params?.companyName;
   const [data, setData] = useState(null);
@@ -71,7 +72,17 @@ export default function DebtorsScreen({ navigation, route }) {
     }
   }
 
-  const header = (
+  const header = asTab ? (
+    <LargeHeader
+      title="Debtors"
+      right={
+        <>
+          <IconButton icon="download" label="Export debtors as CSV" onPress={handleExport} />
+          <AccountButton user={user} onLogout={logout} />
+        </>
+      }
+    />
+  ) : (
     <NavHeader
       title={companyName ? `${companyName} debtors` : 'Debtors'}
       right={<IconButton icon="download" label="Export debtors as CSV" variant="ghost" onPress={handleExport} />}

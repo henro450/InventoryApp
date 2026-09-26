@@ -24,10 +24,11 @@ const METHOD_LABEL = { cash: 'Cash', transfer: 'Transfer' };
 // saves money received on this phone first (works offline) and syncs it like any transaction.
 // Read-only when a Main Company is viewing a Sub Company's customer.
 export default function DebtorDetailScreen({ route }) {
-  const { user } = useAuth();
+  const { user, isCompanyAdmin } = useAuth();
   const { customerPhone } = route.params;
   const companyId = route.params.companyId || user.companyId;
-  const editable = companyId === user.companyId;
+  // Recording repayments is for company admins; everyone can see what a customer owes.
+  const editable = companyId === user.companyId && isCompanyAdmin;
   const [data, setData] = useState(null);
   const [paying, setPaying] = useState(false);
   const [amount, setAmount] = useState('');

@@ -15,6 +15,7 @@ import {
   signInWithFingerprint,
   turnOffFingerprint as turnOffStoredFingerprint,
 } from '../auth/biometrics';
+import { clearSubscriptionReminders } from '../subscription/reminders';
 
 // AUTH-02: token is cached locally (SecureStore) so the user stays logged in and can keep
 // using the app offline after the first successful login.
@@ -70,6 +71,10 @@ export function AuthProvider({ children }) {
     setUnauthorizedHandler(async (code) => {
       await SecureStore.deleteItemAsync('cachedUser');
       setUser(null);
+      if (code === 'ACCOUNT_DISABLED') {
+        Alert.alert('Account deactivated', 'Your account has been deactivated. Ask your company admin if you need access again.');
+        return;
+      }
       Alert.alert(
         code === 'TOKEN_EXPIRED' ? 'Session expired' : 'Authentication error',
         code === 'TOKEN_EXPIRED'
@@ -79,17 +84,14 @@ export function AuthProvider({ children }) {
     });
   }, []);
 
-  // The SuperAdmin can change whether a company may have Sub Companies at any time, so a
-  // restored session re-reads it rather than trusting the copy cached at login.
+  // Admin status, name and company settings (e.g. whether Sub Companies are allowed) can change
+  // on the server at any time, so a restored session re-reads them rather than trusting the copy
+  // cached at login. A deactivated account gets a 401 here and is logged out by the handler above.
   async function refreshCompany(currentUser) {
-    if (currentUser.role !== ROLES.MAIN) return;
     try {
-      const { company } = await api.getMyCompany();
-      if (!company) return;
-      const updated = {
-        ...currentUser,
-        company: { id: company.id, name: company.name, type: company.type, allowSubCompanies: company.allowSubCompanies },
-      };
+      const { user: fresh } = await api.getMe();
+      if (!fresh || fresh.id !== currentUser.id) return;
+      const updated = { ...currentUser, ...fresh };
       await SecureStore.setItemAsync('cachedUser', JSON.stringify(updated));
       setUser((u) => (u && u.id === updated.id ? updated : u));
     } catch {
@@ -170,6 +172,7 @@ export function AuthProvider({ children }) {
 
   async function performLogout() {
     justLoggedOut.current = true;
+    clearSubscriptionReminders();
     await clearToken();
     await SecureStore.deleteItemAsync('cachedUser');
     clearLocalData();
@@ -194,14 +197,26 @@ export function AuthProvider({ children }) {
 
   const isSuperAdmin = user?.role === ROLES.SUPER;
   const isMainCompany = user?.role === ROLES.MAIN;
+  // Company admins manage users, items, reports and settings; regular users record sales/stock
+  // and see debtors. Sessions cached before this existed belonged to the company's only user,
+  // its admin; the server enforces the real value either way.
+  const isCompanyAdmin = !!user && user.isCompanyAdmin !== false;
+  // Stock in and sales are paused for the whole company once its free trial / paid subscription
+  // has ended (unless it's free). Decided from the end date the server sent at login/refresh and
+  // this phone's clock, so it also applies offline. The server enforces the same rule.
+  const subscription = user?.subscription || null;
+  const subscriptionBlocked = !!(
+    subscription && subscription.status !== 'free' && subscription.endsAt && Date.now() > new Date(subscription.endsAt).getTime()
+  );
+  const refreshUser = () => (user ? refreshCompany(user) : Promise.resolve());
   // Sessions cached before this flag existed have no company info; the server still enforces it.
-  const allowSubCompanies = isMainCompany && user?.company?.allowSubCompanies !== false;
+  const allowSubCompanies = isMainCompany && isCompanyAdmin && user?.company?.allowSubCompanies !== false;
 
   return (
     <AuthContext.Provider
       value={{
-        user, loading, login, loginWithFingerprint, logout, isMainCompany, isSuperAdmin, allowSubCompanies,
-        fingerprintEnabled, turnOffFingerprint, shouldAutoPromptFingerprint,
+        user, loading, login, loginWithFingerprint, logout, isMainCompany, isSuperAdmin, isCompanyAdmin, allowSubCompanies,
+        fingerprintEnabled, turnOffFingerprint, shouldAutoPromptFingerprint, subscriptionBlocked, refreshUser,
       }}
     >
       {children}

@@ -10,7 +10,7 @@ import { formatMoney, formatNumber } from '../utils/format';
 import { formatPhone } from '../utils/phone';
 import Icon from '../components/Icon';
 import CustomerSheet from '../components/CustomerSheet';
-import { Text, Screen, NavHeader, Card, Divider, Segmented, Stepper, Field, Note, Stat, BottomBar, Button, IconButton } from '../components/ui';
+import { Text, Screen, NavHeader, Card, Divider, Segmented, Stepper, Field, Note, Stat, BottomBar, Button, IconButton, Banner } from '../components/ui';
 import { colors, fonts, type as typo } from '../theme';
 
 const TYPES = [
@@ -40,7 +40,7 @@ const PAYMENT_METHODS = [
 // afterward as a best-effort attempt; if it fails, the record stays queued for the next
 // automatic sync pass.
 export default function StockTransactionScreen({ route, navigation }) {
-  const { user } = useAuth();
+  const { user, subscriptionBlocked, isCompanyAdmin } = useAuth();
   // The route param is a snapshot from when the list was loaded; always show (and save
   // against) the item's current row on this device, which a background sync may have updated.
   const [item, setItem] = useState(route.params.item);
@@ -62,6 +62,18 @@ export default function StockTransactionScreen({ route, navigation }) {
   const defaultedPriceValue = item.lastPurchasePrice;
   const hasDefault = defaultedPriceValue !== null && defaultedPriceValue !== undefined;
 
+  function alertBlocked() {
+    Alert.alert(
+      'Subscription ended',
+      isCompanyAdmin
+        ? 'Stock in and sales are paused until the subscription is paid. Open Subscription to pay and upload proof of payment.'
+        : 'Stock in and sales are paused until your company renews its subscription. Please tell your company admin.',
+      isCompanyAdmin
+        ? [{ text: 'Later', style: 'cancel' }, { text: 'Subscription', onPress: () => navigation.navigate('Subscription') }]
+        : [{ text: 'OK' }]
+    );
+  }
+
   function alertOutOfStock(current) {
     Alert.alert('Out of stock', `${current.name} has no stock available, so it can't be sold. Record a stock-in first.`);
   }
@@ -74,6 +86,10 @@ export default function StockTransactionScreen({ route, navigation }) {
   }
 
   async function handleSave() {
+    if (subscriptionBlocked && (type === 'in' || type === 'out')) {
+      alertBlocked();
+      return;
+    }
     const qty = Number(quantity);
     if (!qty || qty <= 0) {
       Alert.alert('Invalid quantity', 'Please enter a quantity greater than zero.');
@@ -185,6 +201,20 @@ export default function StockTransactionScreen({ route, navigation }) {
       <NavHeader title="Record transaction" />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          {subscriptionBlocked && (
+            <Banner
+              kind="error"
+              icon="alert"
+              title="Subscription ended"
+              subtitle={
+                isCompanyAdmin
+                  ? 'Stock in and sales are paused until the subscription is paid. Adjustments still work.'
+                  : 'Stock in and sales are paused until your company renews. Adjustments still work.'
+              }
+              actionLabel={isCompanyAdmin ? 'Pay' : undefined}
+              onAction={() => navigation.navigate('Subscription')}
+            />
+          )}
           <Card padding={16}>
             <View style={styles.itemRow}>
               <View style={styles.itemIcon}>
@@ -295,7 +325,7 @@ export default function StockTransactionScreen({ route, navigation }) {
         </ScrollView>
 
         <BottomBar>
-          <Button title="Save transaction" onPress={handleSave} />
+          <Button title="Save transaction" onPress={handleSave} disabled={subscriptionBlocked && (type === 'in' || type === 'out')} />
           <Text style={[typo.caption, { textAlign: 'center' }]}>Saved on this device first, then synced automatically.</Text>
         </BottomBar>
       </KeyboardAvoidingView>

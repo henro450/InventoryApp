@@ -7,6 +7,23 @@ export function formatMoney(n) {
   return `${value < 0 ? '−' : ''}₦${grouped}.${cents}`;
 }
 
+// A company's subscription for SuperAdmin screens: price and status, e.g.
+// "₦25,000.00 · Active until 26 Oct 2026" / "No price · Expired 1 Sep 2026" / "Not subscribed".
+export function formatSubscription(subscription) {
+  if (!subscription) return 'Not subscribed';
+  if (subscription.status === 'free') return 'Free (₦0)';
+  const price = subscription.price !== null && subscription.price !== undefined ? formatMoney(subscription.price) : 'No price set';
+  const status =
+    subscription.status === 'active'
+      ? `Active until ${formatDate(subscription.endsAt || subscription.currentPeriodEnd)}`
+      : subscription.status === 'trial'
+        ? `Free trial until ${formatDate(subscription.endsAt)}`
+        : subscription.status === 'expired'
+          ? `Expired ${formatDate(subscription.endsAt || subscription.currentPeriodEnd)}`
+          : 'Not subscribed';
+  return `${price} · ${status}`;
+}
+
 export function formatNumber(n) {
   return String(Math.round(Number(n || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }

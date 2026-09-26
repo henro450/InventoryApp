@@ -8,6 +8,12 @@ export const API_BASE_URL = (
 
 const REQUEST_TIMEOUT_MS = 15000;
 
+// For requests made outside request() (file previews/downloads) that need the session.
+export async function authHeaders() {
+  const token = await getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function getToken() {
   return SecureStore.getItemAsync('authToken');
 }
@@ -79,8 +85,25 @@ export const api = {
   adminCreateCompany: (payload) => request('/admin/companies', { method: 'POST', body: payload }),
   adminUpdateCompany: (id, payload) => request(`/admin/companies/${id}`, { method: 'PATCH', body: payload }),
   adminResendInvite: (id) => request(`/admin/companies/${id}/resend-invite`, { method: 'POST' }),
+  adminCompanyUsers: (id) => request(`/admin/companies/${id}/users`),
+  adminGetSettings: () => request('/admin/settings'),
+  adminUpdateSettings: (payload) => request('/admin/settings', { method: 'PUT', body: payload }),
+  adminListPayments: (status) => request(`/admin/payments${status ? `?status=${status}` : ''}`),
+  adminApprovePayment: (id, note) => request(`/admin/payments/${id}/approve`, { method: 'POST', body: { note } }),
+  adminRejectPayment: (id, note) => request(`/admin/payments/${id}/reject`, { method: 'POST', body: { note } }),
+
+  // Company admins: subscription and proof of payment.
+  getSubscription: () => request('/subscription'),
+  uploadSubscriptionPayment: (payload) => request('/subscription/payments', { method: 'POST', body: payload }),
 
   getMyCompany: () => request('/companies/mine'),
+  getMe: () => request('/auth/me'),
+
+  // Company admins: users of their own company.
+  getCompanyUsers: () => request('/company-users'),
+  addCompanyUser: (payload) => request('/company-users', { method: 'POST', body: payload }),
+  updateCompanyUser: (id, payload) => request(`/company-users/${id}`, { method: 'PATCH', body: payload }),
+  resendCompanyUserInvite: (id) => request(`/company-users/${id}/resend-invite`, { method: 'POST' }),
   createSubCompany: (payload) => request('/companies/sub-companies', { method: 'POST', body: payload }),
   updateSubCompany: (id, payload) => request(`/companies/sub-companies/${id}`, { method: 'PATCH', body: payload }),
   updateAlertSettings: (payload) => request('/companies/mine', { method: 'PATCH', body: payload }),

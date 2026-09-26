@@ -112,7 +112,8 @@ export function IconButton({ icon, label, onPress, variant = 'surface', size = 4
 }
 
 export function AccountButton({ user, onLogout }) {
-  const { fingerprintEnabled, turnOffFingerprint } = useAuth();
+  const { fingerprintEnabled, turnOffFingerprint, isCompanyAdmin, isSuperAdmin } = useAuth();
+  const navigation = useNavigation();
   return (
     <Pressable
       accessibilityRole="button"
@@ -120,6 +121,12 @@ export function AccountButton({ user, onLogout }) {
       onPress={() =>
         Alert.alert(user?.name || 'Account', user?.email || '', [
           { text: 'Cancel', style: 'cancel' },
+          ...(isCompanyAdmin && !isSuperAdmin
+            ? [
+                { text: 'Subscription', onPress: () => navigation.navigate('Subscription') },
+                { text: 'Manage users', onPress: () => navigation.navigate('CompanyUsers') },
+              ]
+            : []),
           ...(fingerprintEnabled ? [{ text: 'Turn off fingerprint login', onPress: turnOffFingerprint }] : []),
           { text: 'Log out', style: 'destructive', onPress: onLogout },
         ])

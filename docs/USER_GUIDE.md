@@ -26,6 +26,42 @@ email. You'll get a link (valid for 1 hour) that opens the same Set password scr
 even without an internet connection — the app caches your session so you can keep working
 offline; it'll pick back up with the server automatically once you're back online.
 
+## Users in your company
+
+A company (main or sub) can have more than one user. The person the company was registered with
+is its **admin**. Only an admin can add users: tap your initials (the account button) → **Manage
+users** → **+**, enter their email (and name), and choose **Regular user** or **Admin**. They get
+an email with a link to set their password, just like when the company was registered. From the
+same screen an admin can make someone an admin or a regular user, **Deactivate** a user (they can't
+log in any more; their past records stay) or reactivate them, and **Resend invite** to someone
+who hasn't set up their account. A company always keeps at least one admin.
+
+- **Regular users** see Inventory and Debtors. They record stock in, stock out (sales, including
+  part payments) and adjustments, scan items, and see who owes money.
+- **Admins** can also add and edit items, see Reports, the Audit log and Alerts, record debt
+  repayments, change settings, manage users, and (main company) manage Sub Companies.
+
+## Subscription
+
+Company admins: tap your initials → **Subscription**. It shows whether your subscription is active
+and how many days are left, the price, and the **account to pay into** (tap the account number to
+copy it). After paying, upload the proof: **Take photo** of the receipt or **Choose file** (a
+screenshot or PDF, up to 5 MB), optionally with the amount and a note, then **Send proof of
+payment**. HenroTech checks it; once approved, your subscription runs for 30 days from the day of
+approval (the number of days is set by HenroTech). Your payment history shows each proof as
+awaiting approval, approved (with the dates it covers) or rejected (with the reason).
+
+New companies get a **free trial** (30 days by default) from registration. After the trial, or when a
+paid subscription ends, **stock in and sales are paused for everyone in the company and its
+sub-companies** until the subscription is paid (adjustments/stock counts still work). Everyone sees a
+"Subscription ended" message; admins get a **Pay** button. If HenroTech set your price to ₦0, the app is
+free and never pauses.
+
+A few days before your trial or subscription ends (3 by default) you'll get phone notifications twice a day
+(and a reminder when you open the app) until you renew, continuing for a few days after it ends.
+Allow notifications when the app asks. Sub-companies are covered by their main company's
+subscription.
+
 ## The two kinds of accounts
 
 - **Main Company** — your own inventory, plus (optionally) oversight of any linked Sub
