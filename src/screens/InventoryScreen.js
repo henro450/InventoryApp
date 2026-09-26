@@ -1,11 +1,11 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, FlatList, Pressable, StyleSheet, RefreshControl, Alert } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '../context/AuthContext';
-import { getLocalItems, getSyncStatusSummary, saveLocalItem, deleteLocalItem, getLastSyncedAt } from '../db/localDb';
+import { getLocalItems, getSyncStatusSummary, saveLocalItem, deleteLocalItem, getLastSyncedAt, getItemIdsWithPendingWork } from '../db/localDb';
+import { useLocalRefresh } from '../hooks/useLocalRefresh';
 import { runSync } from '../sync/syncEngine';
 import { isLowStock } from '../utils/inventory';
 import { exportCsv, pickAndParseCsv } from '../utils/csvExport';
@@ -30,9 +30,11 @@ const CATALOG_COLUMNS = [
 // their data has reached the cloud. The same screen doubles as the Main Company's read-only
 // view of a Sub Company when opened with route.params.companyId.
 export default function InventoryScreen({ navigation, route }) {
-  const { user, isMainCompany, logout } = useAuth();
+  const { user, isMainCompany, isCompanyAdmin, logout, subscriptionBlocked } = useAuth();
   const viewingCompanyId = route?.params?.companyId || user.companyId;
   const isOwnCompany = viewingCompanyId === user.companyId;
+  // Everyone records stock for their own company; only admins add, edit, import or deactivate items.
+  const canManageItems = isOwnCompany && isCompanyAdmin;
   const [items, setItems] = useState([]);
   const [syncSummary, setSyncSummary] = useState({ total: 0, pending: 0, failed: 0, conflict: 0 });
   const [refreshing, setRefreshing] = useState(false);
@@ -40,15 +42,13 @@ export default function InventoryScreen({ navigation, route }) {
   const [query, setQuery] = useState('');
 
   const loadLocal = useCallback(() => {
-    setItems(getLocalItems(viewingCompanyId));
+    const pendingIds = getItemIdsWithPendingWork(user.id);
+    setItems(getLocalItems(viewingCompanyId).map((i) => ({ ...i, hasPendingWork: pendingIds.has(i.localId) })));
     setSyncSummary(getSyncStatusSummary(user.id));
   }, [viewingCompanyId, user.id]);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadLocal();
-    }, [loadLocal])
-  );
+  // On focus and after every background sync, so quantities pulled from other devices appear.
+  useLocalRefresh(loadLocal);
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -172,9 +172,9 @@ export default function InventoryScreen({ navigation, route }) {
       title="Inventory"
       right={
         <>
-          <IconButton icon="upload" label="Import catalog from CSV" onPress={handleImportCatalog} />
+          {canManageItems && <IconButton icon="upload" label="Import catalog from CSV" onPress={handleImportCatalog} />}
           <IconButton icon="download" label="Export catalog as CSV" onPress={handleExportCatalog} />
-          {!isMainCompany && <AccountButton user={user} onLogout={logout} />}
+          {(!isMainCompany || !isCompanyAdmin) && <AccountButton user={user} onLogout={logout} />}
         </>
       }
     />
@@ -193,6 +193,16 @@ export default function InventoryScreen({ navigation, route }) {
 
   const listHeader = (
     <View style={styles.listHeader}>
+      {isOwnCompany && subscriptionBlocked && (
+        <Banner
+          kind="error"
+          icon="alert"
+          title="Subscription ended · stock in and sales paused"
+          subtitle={isCompanyAdmin ? 'Pay and upload proof of payment to continue.' : 'Ask your company admin to renew the subscription.'}
+          actionLabel={isCompanyAdmin ? 'Pay' : undefined}
+          onAction={() => navigation.navigate('Subscription')}
+        />
+      )}
       <View style={styles.searchRow}>
         <SearchField value={query} onChangeText={setQuery} placeholder="Search name or SKU" />
         {isOwnCompany && (
@@ -238,14 +248,20 @@ export default function InventoryScreen({ navigation, route }) {
         keyExtractor={(item) => item.localId}
         ListHeaderComponent={listHeader}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
-        contentContainerStyle={[styles.list, isOwnCompany && { paddingBottom: 96 }]}
+        contentContainerStyle={[styles.list, canManageItems && { paddingBottom: 96 }]}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         keyboardShouldPersistTaps="handled"
         ListEmptyComponent={
           items.length === 0 ? (
             <EmptyState
               title="No items yet"
-              body={isOwnCompany ? 'Add your first item, scan one, or import a CSV catalog.' : 'This company has no items yet.'}
+              body={
+                canManageItems
+                  ? 'Add your first item, scan one, or import a CSV catalog.'
+                  : isOwnCompany
+                    ? 'Your company admin adds the items you can sell.'
+                    : 'This company has no items yet.'
+              }
             />
           ) : (
             <EmptyState icon="search" title="Nothing matches" body="Try a different search or filter." />
@@ -255,6 +271,7 @@ export default function InventoryScreen({ navigation, route }) {
           <ItemRow
             item={item}
             editable={isOwnCompany}
+            canManage={canManageItems}
             onPress={() => navigation.navigate('StockTransaction', { item })}
             onEdit={() => handleEdit(item)}
             onDeactivate={() => handleDeactivate(item)}
@@ -262,7 +279,7 @@ export default function InventoryScreen({ navigation, route }) {
           />
         )}
       />
-      {isOwnCompany && (
+      {canManageItems && (
         <Pressable
           accessibilityRole="button"
           onPress={() => navigation.navigate('AddItem')}
@@ -276,11 +293,12 @@ export default function InventoryScreen({ navigation, route }) {
   );
 }
 
-function ItemRow({ item, editable, onPress, onEdit, onDeactivate, onMore }) {
+function ItemRow({ item, editable, canManage, onPress, onEdit, onDeactivate, onMore }) {
   const swipeRef = useRef(null);
   const low = isLowStock(item);
   const conflict = item.syncStatus === 'conflict';
-  const waiting = item.syncStatus === 'pending' || item.syncStatus === 'failed';
+  // Includes items whose only unsynced change is a stock movement.
+  const waiting = !conflict && (item.syncStatus === 'pending' || item.syncStatus === 'failed' || item.hasPendingWork);
 
   const body = (
     <Pressable
@@ -317,11 +335,11 @@ function ItemRow({ item, editable, onPress, onEdit, onDeactivate, onMore }) {
         <Text style={[styles.qty, low && { color: colors.danger }]}>{formatNumber(item.quantityOnHand)}</Text>
         <Text style={type.caption}>{item.unit}</Text>
       </View>
-      {editable && <IconButton icon="more" label={`More actions for ${item.name}`} variant="ghost" size={36} onPress={onMore} />}
+      {canManage && <IconButton icon="more" label={`More actions for ${item.name}`} variant="ghost" size={36} onPress={onMore} />}
     </Pressable>
   );
 
-  if (!editable) return body;
+  if (!canManage) return body;
 
   return (
     <Swipeable

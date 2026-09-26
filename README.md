@@ -56,6 +56,14 @@ src/
   operation commit together in SQLite. Stable operation IDs make retries safe, while a
   per-user sequence cursor downloads ordered changes and deletion tombstones. A background
   timer attempts sync every 15s; pull-to-refresh also triggers it immediately.
+- **Offline reports** (RPT-01..07): the pull keeps companies, items and the full stock
+  transaction history, and `src/reports/reportMath.js` computes every report, alert and
+  company comparison on the device with the server's formulas. Screens read only SQLite, so
+  they work offline and include unsynced local changes. `npm run report-parity` checks the
+  device math against a local API's `/api/reports` output.
+- **Unsynced work is never overwritten**: a stock movement is applied to the item's current
+  row inside the same SQLite transaction, and a server item change that arrives while the
+  item still has unsynced work is deferred (`deferred_changes`) and applied after the push.
 - **Default sale price in the UI** (PRC-08): leaving the sale price blank on a "Stock Out"
   shows a note confirming which price will be used, matching the server's default logic.
 - **Sync status and conflicts** (SYNC-06/SYNC-08): the Inventory screen shows unsynced,
@@ -75,7 +83,6 @@ src/
   to versions compatible with Expo SDK 51 as of this writing — if `npm install` complains
   about peer dependency mismatches, run `npx expo install --check` to have Expo align
   versions automatically.
-- **Comparison view across Sub Companies** (RPT-07) is not yet built — the Dashboard lists
-  and drills into Sub Companies individually, but there's no side-by-side metric view yet.
-- **Report export to PDF/Excel/CSV** (RPT-05) is not implemented on either the client or
-  server side yet.
+- **Report export** (RPT-05) is CSV only; there's no PDF/Excel export.
+- **Audit log and report snapshots** come from the server; offline they show the last copy
+  saved on the phone.

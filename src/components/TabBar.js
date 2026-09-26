@@ -11,6 +11,7 @@ const TAB_META = {
   Reports: { label: 'Reports', icon: 'chart' },
   AuditLog: { label: 'Audit', icon: 'list' },
   Alerts: { label: 'Alerts', icon: 'bell' },
+  Debtors: { label: 'Debtors', icon: 'wallet' },
 };
 
 // Custom bottom tab bar. The "Scan" route is not a real page: pressing it opens the scanner

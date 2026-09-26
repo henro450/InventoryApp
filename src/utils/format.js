@@ -4,7 +4,24 @@ export function formatMoney(n) {
   const value = Number(n || 0);
   const [whole, cents] = Math.abs(value).toFixed(2).split('.');
   const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `${value < 0 ? '−' : ''}$${grouped}.${cents}`;
+  return `${value < 0 ? '−' : ''}₦${grouped}.${cents}`;
+}
+
+// A company's subscription for SuperAdmin screens: price and status, e.g.
+// "₦25,000.00 · Active until 26 Oct 2026" / "No price · Expired 1 Sep 2026" / "Not subscribed".
+export function formatSubscription(subscription) {
+  if (!subscription) return 'Not subscribed';
+  if (subscription.status === 'free') return 'Free (₦0)';
+  const price = subscription.price !== null && subscription.price !== undefined ? formatMoney(subscription.price) : 'No price set';
+  const status =
+    subscription.status === 'active'
+      ? `Active until ${formatDate(subscription.endsAt || subscription.currentPeriodEnd)}`
+      : subscription.status === 'trial'
+        ? `Free trial until ${formatDate(subscription.endsAt)}`
+        : subscription.status === 'expired'
+          ? `Expired ${formatDate(subscription.endsAt || subscription.currentPeriodEnd)}`
+          : 'Not subscribed';
+  return `${price} · ${status}`;
 }
 
 export function formatNumber(n) {
@@ -19,6 +36,30 @@ export function formatPercent(n, digits = 1) {
 export function formatDate(iso) {
   if (!iso) return '';
   return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// Calendar dates chosen in date fields are kept as 'YYYY-MM-DD' in the phone's local time.
+export function dateToYmd(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+export function ymdToDate(ymd) {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+// A picked date range covers whole days on this phone: from the start of the first day to the
+// end of the last day (so choosing today as "To" includes everything recorded today).
+export function rangeBounds({ from, to } = {}) {
+  const start = from ? ymdToDate(from) : null;
+  const end = to ? ymdToDate(to) : null;
+  if (end) end.setHours(23, 59, 59, 999);
+  return { from: start ? start.toISOString() : '', to: end ? end.toISOString() : '' };
+}
+
+export function formatYmd(ymd) {
+  return ymd ? ymdToDate(ymd).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 }
 
 export function formatDateTime(iso) {

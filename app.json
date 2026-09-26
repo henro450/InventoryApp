@@ -2,7 +2,9 @@
   "expo": {
     "name": "Inventory App",
     "slug": "inventory-app",
+    "owner": "henro450",
     "version": "1.0.0",
+    "scheme": "beams",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "splash": {
@@ -27,7 +29,30 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to scan item barcodes."
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow $(PRODUCT_NAME) to use Face ID to log you in."
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow $(PRODUCT_NAME) to open your contacts so you can pick the customer who is paying part of a sale."
+        }
+      ],
+      [
+        "expo-notifications",
+        {}
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to photograph receipts for proof of payment.",
+          "photosPermission": false
+        }
+      ]
     ],
     "extra": {
       "eas": {

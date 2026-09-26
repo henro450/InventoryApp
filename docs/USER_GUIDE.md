@@ -2,14 +2,65 @@
 
 ## Getting started
 
-**If your company is new**, use "Register a Company" on the login screen — this creates your
-company and your own login in one step. You don't need anyone to invite you, and you don't
-need to link any other company to fully use the app; a standalone company works exactly the
-same as one with linked Sub Companies.
+**If your company is new**, the platform administrator (SuperAdmin) registers it with your
+email address. You'll get an email saying you've been registered, with a **Set your password**
+button. Open it on the phone where the app is installed: it opens the app on a Set password
+screen. Choose a password (at least 8 characters), then log in with your email and that
+password. The link expires after 72 hours; if it has, use **Forgot password?** on the login
+screen to get a new one. You don't need to link any other company to fully use the app; a
+standalone company works exactly the same as one with linked Sub Companies.
+
+**Fingerprint login:** after you log in with your email and password, if your phone has a
+fingerprint set up, the app asks whether you'd like to log in with your fingerprint next time.
+Tap **Use fingerprint** and scan your finger. From then on the login screen opens the fingerprint
+prompt automatically (there's also a **Log in with fingerprint** button). Your password isn't
+saved on the phone. To turn it off, tap your initials (the account button) and choose **Turn off
+fingerprint login**. It's switched off automatically if your password is reset, and only one
+account per phone can use it (setting it up for another account replaces the previous one).
+Fingerprint login needs an internet connection, like a normal login.
+
+**If you forget your password**, tap **Forgot password?** on the login screen and enter your
+email. You'll get a link (valid for 1 hour) that opens the same Set password screen.
 
 **If you already have an account**, log in with your email and password. You'll stay logged in
 even without an internet connection — the app caches your session so you can keep working
 offline; it'll pick back up with the server automatically once you're back online.
+
+## Users in your company
+
+A company (main or sub) can have more than one user. The person the company was registered with
+is its **admin**. Only an admin can add users: tap your initials (the account button) → **Manage
+users** → **+**, enter their email (and name), and choose **Regular user** or **Admin**. They get
+an email with a link to set their password, just like when the company was registered. From the
+same screen an admin can make someone an admin or a regular user, **Deactivate** a user (they can't
+log in any more; their past records stay) or reactivate them, and **Resend invite** to someone
+who hasn't set up their account. A company always keeps at least one admin.
+
+- **Regular users** see Inventory and Debtors. They record stock in, stock out (sales, including
+  part payments) and adjustments, scan items, and see who owes money.
+- **Admins** can also add and edit items, see Reports, the Audit log and Alerts, record debt
+  repayments, change settings, manage users, and (main company) manage Sub Companies.
+
+## Subscription
+
+Company admins: tap your initials → **Subscription**. It shows whether your subscription is active
+and how many days are left, the price, and the **account to pay into** (tap the account number to
+copy it). After paying, upload the proof: **Take photo** of the receipt or **Choose file** (a
+screenshot or PDF, up to 5 MB), optionally with the amount and a note, then **Send proof of
+payment**. HenroTech checks it; once approved, your subscription runs for 30 days from the day of
+approval (the number of days is set by HenroTech). Your payment history shows each proof as
+awaiting approval, approved (with the dates it covers) or rejected (with the reason).
+
+New companies get a **free trial** (30 days by default) from registration. After the trial, or when a
+paid subscription ends, **stock in and sales are paused for everyone in the company and its
+sub-companies** until the subscription is paid (adjustments/stock counts still work). Everyone sees a
+"Subscription ended" message; admins get a **Pay** button. If HenroTech set your price to ₦0, the app is
+free and never pauses.
+
+A few days before your trial or subscription ends (3 by default) you'll get phone notifications twice a day
+(and a reminder when you open the app) until you renew, continuing for a few days after it ends.
+Allow notifications when the app asks. Sub-companies are covered by their main company's
+subscription.
 
 ## The two kinds of accounts
 
@@ -43,11 +94,25 @@ app.
 
 ## Everything works offline
 
-Add items, record transactions, edit things — all of it works with no connection at all. The
-sync bar at the top of Inventory tells you how many changes are still waiting to reach the
-server ("All synced" or "N record(s) pending sync"). Nothing is ever lost by going offline;
-queued changes sync automatically the moment you're back online (and periodically retry on
-their own if a sync attempt fails).
+The app works from the data saved on your phone, so almost everything works with no
+connection at all:
+- adding and editing items, and recording stock in, stock out and adjustments
+- Inventory, the Dashboard, Reports, Alerts and Compare Companies. These are calculated on
+  the phone from everything synced so far **plus** the changes you've made on this phone that
+  haven't synced yet, so your numbers are always up to date with your own work.
+
+When you have unsynced changes, those screens say so ("Includes N changes from this phone that
+haven't synced yet") with a **Sync now** button. Offline, they say "Offline · showing data saved
+on this phone". Items with an unsynced change show **Waiting to sync** in Inventory. Nothing is
+ever lost by going offline; queued changes sync automatically the moment you're back online
+(and retry on their own if a sync attempt fails). Changes made on other phones appear after
+your next sync.
+
+**Needs a connection:** logging in for the first time, adding/renaming/deactivating Sub
+Companies and sending invites, saving the price-anomaly threshold, generating a report
+snapshot, and the SuperAdmin screens. The Audit log and scheduled report snapshots come from
+the server; offline you see the last copy loaded on the phone (the audit log also lists your
+unsynced changes at the top as **Waiting to sync**).
 
 ## Importing/exporting your item catalog
 
@@ -63,7 +128,32 @@ Main Company — by Sub Company), a price trend for any one item you select, a d
 report (comparing what the system expected vs. what you actually counted, for every manual
 adjustment you've made), and a history of automatically-generated daily summaries. Every
 section can be filtered by category, item, and/or date range, and exported to CSV
-individually.
+individually. Reports are calculated on the phone, so they work offline and include changes
+that haven't synced yet.
+
+**Part payments and people owing:** on a stock out (sale), **Amount paid** is optional. Leave it
+blank if the customer paid in full. Enter less for a part payment, or 0 if they're taking the goods
+on credit. Tap the contact button beside the field to say who is paying: **Choose from contacts**
+picks someone from your phone's contacts (you'll be asked to allow access the first time), or type
+their name and phone number if they aren't in your contacts. The app shows how much will be owed
+before you save, and won't save a part payment without a customer.
+
+**Debtors** lists everyone who owes money, biggest balance first, with the total owed to you
+(open it from **Money owed by customers** in Reports, or the "owed to you" line on the Dashboard).
+Tap a person to see their part-paid sales and repayments, **Call** them, or **Record payment** when
+they pay some or all of what they owe (enter the amount and whether it was cash or transfer). The
+same person is recognised whether their number was typed as 0803…, +234 803… or picked from
+contacts. Debtors can be exported to CSV. Like everything else, this works offline.
+
+**Cash or transfer:** when you record a stock out (sale), choose how the customer paid, Cash
+or Transfer (Cash is selected by default). For a part payment, this is how the part they paid
+was made. Reports has a **Sales by payment method** section
+showing the revenue, number of sales and share for Cash, Transfer and **Not yet paid (credit)**,
+plus debt repayments received, for whatever date range you've filtered, and it can be exported to
+CSV. **Money owed by customers** shows the total outstanding, how many customers owe, and the
+biggest balances. Each recent sale in the per-transaction list shows its
+payment method, the daily summaries show the cash/transfer split, and Compare Companies has
+Cash and Transfer columns. Sales recorded before this option existed are counted as cash.
 
 ## Alerts
 
@@ -87,8 +177,10 @@ Company's audit log.
 - **Dashboard**: your own quick links, an aggregate summary across yourself + every linked Sub
   Company, and a list of your Sub Companies with drill-down links into each one's inventory,
   reports, audit log, and alerts (always read-only when viewing someone else's data).
-- **Manage Sub Companies**: create a new one, rename, deactivate, or reactivate an existing
-  one.
+- **Manage Sub Companies**: add a new one by entering its name and its admin's email (they get
+  an email with a link to set their own password; until they do, it shows **Invite pending**
+  with a **Resend invite** button), rename, deactivate, or reactivate an existing one. This is
+  only available if the SuperAdmin set your company up to have Sub Companies.
 - **Compare Companies**: a side-by-side table of item count, low-stock count, sales, purchase
   cost, and margin across every company you can see, including your own.
 

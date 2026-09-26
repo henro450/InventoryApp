@@ -1,1 +1,1 @@
-export const ROLES = { MAIN: 'main_company', SUB: 'sub_company' };
+export const ROLES = { SUPER: 'super_admin', MAIN: 'main_company', SUB: 'sub_company' };

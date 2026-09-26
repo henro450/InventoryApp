@@ -2,13 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, SectionList, StyleSheet, RefreshControl, ScrollView } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
-import { getLastSyncedAt } from '../db/localDb';
+import { getLastSyncedAt, getCached, setCached, getOutboxForCompany, getLocalItemByLocalId } from '../db/localDb';
+import { useLocalRefresh } from '../hooks/useLocalRefresh';
 import { ROLES } from '../constants/roles';
-import { formatDate, formatMoney, formatTime, lastSyncedLabel } from '../utils/format';
+import { formatDate, formatDateTime, formatMoney, formatTime, formatYmd, lastSyncedLabel, rangeBounds, dateToYmd } from '../utils/format';
 import Icon from '../components/Icon';
 import {
-  Text, Screen, LargeHeader, NavHeader, IconButton, Chip, Card, Field, Button, Banner, EmptyState, Loading,
-  CompanySwitcher, ReadOnlyBanner,
+  Text, Screen, LargeHeader, NavHeader, IconButton, Chip, Card, DateField, Button, Banner, EmptyState, Loading,
+  CompanySwitcher, ReadOnlyBanner, Pill,
 } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
@@ -62,9 +63,62 @@ function describe(log) {
     if (changes.length) detail = changes.join('\n');
   } else if (log.action === 'create' && newV && newV.type && newV.quantity != null) {
     const kind = newV.type === 'in' ? 'Stock in' : newV.type === 'out' ? 'Stock out' : 'Adjustment';
-    detail = `${kind} · ${newV.quantity}${newV.unitPrice != null && newV.type !== 'adjustment' ? ` × ${formatMoney(newV.unitPrice)}` : ''}`;
+    detail = `${kind} · ${newV.quantity}${newV.unitPrice != null && newV.type !== 'adjustment' ? ` × ${formatMoney(newV.unitPrice)}` : ''}${
+      newV.type === 'out' ? ` · ${newV.paymentMethod === 'transfer' ? 'Transfer' : 'Cash'}` : ''
+    }${newV.type === 'out' && newV.amountPaid != null ? ` · paid ${formatMoney(newV.amountPaid)}${newV.customerName ? `, owed by ${newV.customerName}` : ''}` : ''}`;
+  } else if (log.action === 'create' && newV && newV.clientPaymentId && newV.amount != null) {
+    detail = `Repayment · ${formatMoney(newV.amount)} · ${newV.paymentMethod === 'transfer' ? 'Transfer' : 'Cash'}`;
   }
   return { subject, detail };
+}
+
+// The audit log is written by the server, so offline the screen shows the last copy it loaded
+// and filters it on the device. Changes made on this phone that haven't synced yet have no
+// server audit entry; they're listed first as "Waiting to sync".
+const PENDING_ACTION = {
+  'item.create': 'create', 'item.update': 'update', 'item.delete': 'delete', 'stock_transaction.create': 'create', 'debt_payment.create': 'create',
+};
+
+function pendingLogs(user, companyId) {
+  return getOutboxForCompany(user.id, companyId).map((op) => {
+    const isTransaction = op.entityType === 'stock_transaction';
+    if (op.entityType === 'debt_payment') {
+      return {
+        id: `pending-${op.operationId}`,
+        pending: true,
+        action: 'create',
+        entityType: 'DebtPayment',
+        entityId: op.entityLocalId,
+        userId: user.id,
+        role: user.role,
+        occurredAt: op.payload.occurredAt || op.createdAt,
+        newValue: { ...op.payload, name: op.payload.customerName },
+      };
+    }
+    const item = isTransaction && op.payload.clientItemId ? getLocalItemByLocalId(op.payload.clientItemId) : null;
+    return {
+      id: `pending-${op.operationId}`,
+      pending: true,
+      action: PENDING_ACTION[op.operationType] || 'update',
+      entityType: isTransaction ? 'StockTransaction' : 'Item',
+      entityId: op.payload.id ?? op.entityLocalId,
+      userId: user.id,
+      role: user.role,
+      occurredAt: op.payload.occurredAt || op.createdAt,
+      newValue: isTransaction ? { ...op.payload, itemName: item?.name } : op.payload,
+    };
+  });
+}
+
+function filterLogs(logs, { action, userId, from, to }) {
+  return logs.filter((log) => {
+    if (action && log.action !== action) return false;
+    if (userId && log.userId !== userId) return false;
+    const t = new Date(log.occurredAt).getTime();
+    if (from && t < new Date(from).getTime()) return false;
+    if (to && t > new Date(to).getTime()) return false;
+    return true;
+  });
 }
 
 function dayKey(iso) {
@@ -89,8 +143,11 @@ export default function AuditLogScreen({ route }) {
   const isOwnCompany = companyId === user.companyId;
   const lastSynced = getLastSyncedAt(user.id);
 
+  const cacheKey = `auditLogs:${companyId}`;
   const [baseLogs, setBaseLogs] = useState([]);
   const [displayLogs, setDisplayLogs] = useState([]);
+  const [pending, setPending] = useState([]);
+  const [savedAt, setSavedAt] = useState(null); // set while showing the saved offline copy
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
@@ -103,10 +160,22 @@ export default function AuditLogScreen({ route }) {
   const [appliedDates, setAppliedDates] = useState({ from: '', to: '' });
   const [dateError, setDateError] = useState(null);
 
+  useLocalRefresh(() => setPending(isOwnCompany ? pendingLogs(user, companyId) : []));
+
   async function loadUnfiltered() {
     setError(null);
     try {
-      const { logs } = await api.getAuditLogs(companyId);
+      let logs;
+      try {
+        ({ logs } = await api.getAuditLogs(companyId));
+        setCached(cacheKey, logs);
+        setSavedAt(null);
+      } catch (err) {
+        const saved = getCached(cacheKey);
+        if (!saved) throw err;
+        logs = saved.data;
+        setSavedAt(saved.savedAt);
+      }
       setBaseLogs(logs);
       setDisplayLogs(logs);
       setActionFilter(null);
@@ -147,12 +216,18 @@ export default function AuditLogScreen({ route }) {
 
   // Chips apply immediately; dates apply from their panel.
   async function applyFilters({ action = actionFilter, userId = selectedUserId, from = appliedDates.from, to = appliedDates.to } = {}) {
+    const filters = { userId, action, ...rangeBounds({ from, to }) };
+    if (savedAt) {
+      setDisplayLogs(filterLogs(baseLogs, filters));
+      return;
+    }
     try {
-      const { logs } = await api.getAuditLogs(companyId, { userId, action, from, to });
+      const { logs } = await api.getAuditLogs(companyId, filters);
       setDisplayLogs(logs);
       setError(null);
-    } catch (err) {
-      setError(err.message);
+    } catch {
+      // Lost the connection since loading: filter the copy already on screen instead.
+      setDisplayLogs(filterLogs(baseLogs, filters));
     }
   }
 
@@ -169,16 +244,12 @@ export default function AuditLogScreen({ route }) {
   }
 
   function handleApplyDates() {
-    if (fromInput && isNaN(Date.parse(fromInput))) {
-      setDateError('Invalid "from" date — use YYYY-MM-DD');
-      return;
-    }
-    if (toInput && isNaN(Date.parse(toInput))) {
-      setDateError('Invalid "to" date — use YYYY-MM-DD');
+    if (fromInput && toInput && fromInput > toInput) {
+      setDateError('"From" must be on or before "To".');
       return;
     }
     setDateError(null);
-    const dates = { from: fromInput.trim(), to: toInput.trim() };
+    const dates = { from: fromInput, to: toInput };
     setAppliedDates(dates);
     setDatesOpen(false);
     applyFilters(dates);
@@ -194,6 +265,10 @@ export default function AuditLogScreen({ route }) {
   const sections = useMemo(() => {
     const groups = [];
     const index = new Map();
+    if (pending.length) {
+      const visiblePending = filterLogs(pending, { action: actionFilter, userId: selectedUserId, ...rangeBounds(appliedDates) });
+      if (visiblePending.length) groups.push({ title: 'Waiting to sync', data: visiblePending });
+    }
     for (const log of displayLogs) {
       const key = dayKey(log.occurredAt);
       if (!index.has(key)) {
@@ -203,7 +278,7 @@ export default function AuditLogScreen({ route }) {
       groups[index.get(key)].data.push(log);
     }
     return groups;
-  }, [displayLogs]);
+  }, [displayLogs, pending, actionFilter, selectedUserId, appliedDates]);
 
   const header = isOwnCompany ? (
     <LargeHeader
@@ -230,11 +305,15 @@ export default function AuditLogScreen({ route }) {
     );
   }
 
-  const dateLabel = appliedDates.from || appliedDates.to ? `${appliedDates.from || 'Start'} – ${appliedDates.to || 'Today'}` : 'Any date';
+  const dateLabel =
+    appliedDates.from || appliedDates.to ? `${formatYmd(appliedDates.from) || 'Start'} – ${formatYmd(appliedDates.to) || 'Today'}` : 'Any date';
 
   const filters = (
     <View style={styles.filters}>
-      {error && <Banner kind="error" title="Audit log needs a connection" subtitle={error} actionLabel="Retry" onAction={handleRefresh} />}
+      {error && <Banner kind="error" title="Audit log needs a connection" subtitle={`It hasn't been loaded on this phone yet. ${error}`} actionLabel="Retry" onAction={handleRefresh} />}
+      {savedAt && (
+        <Banner kind="info" icon="cloud" title="Offline · saved copy" subtitle={`From ${formatDateTime(savedAt)}. Newer activity appears once you're back online.`} actionLabel="Retry" onAction={handleRefresh} />
+      )}
       <View style={styles.chipRow} accessibilityLabel="Action">
         <Chip label="All" active={!actionFilter} onPress={() => actionFilter && toggleAction(actionFilter)} />
         {ACTIONS.map((a) => (
@@ -262,8 +341,8 @@ export default function AuditLogScreen({ route }) {
       {datesOpen && (
         <Card padding={16} gap={12}>
           <View style={{ flexDirection: 'row', gap: 10 }}>
-            <Field style={{ flex: 1 }} label="From" value={fromInput} onChangeText={setFromInput} placeholder="YYYY-MM-DD" />
-            <Field style={{ flex: 1 }} label="To" value={toInput} onChangeText={setToInput} placeholder="YYYY-MM-DD" />
+            <DateField style={{ flex: 1 }} label="From" value={fromInput} onChange={setFromInput} placeholder="Start" maximumDate={toInput || dateToYmd(new Date())} />
+            <DateField style={{ flex: 1 }} label="To" value={toInput} onChange={setToInput} placeholder="Today" minimumDate={fromInput || undefined} maximumDate={dateToYmd(new Date())} />
           </View>
           {dateError && <Text style={styles.error}>{dateError}</Text>}
           <Button title="Apply dates" variant="dark" height={48} onPress={handleApplyDates} />
@@ -310,6 +389,11 @@ function Entry({ log, first, last }) {
           {humanize(log.entityType || 'Record')} · {formatTime(log.occurredAt)}
           {role ? ` · ${role}` : ''}
         </Text>
+        {log.pending ? (
+          <View style={{ flexDirection: 'row' }}>
+            <Pill kind="warn" icon="sync" label="Waiting to sync" />
+          </View>
+        ) : null}
         {detail ? (
           <View style={styles.detail}>
             <Text style={styles.detailText}>{detail}</Text>

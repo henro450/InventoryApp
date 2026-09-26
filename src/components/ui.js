@@ -16,7 +16,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Icon from './Icon';
 import { colors, fonts, radius, type, shadow } from '../theme';
-import { initials } from '../utils/format';
+import { initials, dateToYmd, ymdToDate, formatYmd } from '../utils/format';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import { useAuth } from '../context/AuthContext';
 
 // The shared component kit. Screens compose these instead of styling raw React Native views,
 // which keeps spacing, type and colour consistent across the app.
@@ -110,6 +112,8 @@ export function IconButton({ icon, label, onPress, variant = 'surface', size = 4
 }
 
 export function AccountButton({ user, onLogout }) {
+  const { fingerprintEnabled, turnOffFingerprint, isCompanyAdmin, isSuperAdmin } = useAuth();
+  const navigation = useNavigation();
   return (
     <Pressable
       accessibilityRole="button"
@@ -117,6 +121,13 @@ export function AccountButton({ user, onLogout }) {
       onPress={() =>
         Alert.alert(user?.name || 'Account', user?.email || '', [
           { text: 'Cancel', style: 'cancel' },
+          ...(isCompanyAdmin && !isSuperAdmin
+            ? [
+                { text: 'Subscription', onPress: () => navigation.navigate('Subscription') },
+                { text: 'Manage users', onPress: () => navigation.navigate('CompanyUsers') },
+              ]
+            : []),
+          ...(fingerprintEnabled ? [{ text: 'Turn off fingerprint login', onPress: turnOffFingerprint }] : []),
           { text: 'Log out', style: 'destructive', onPress: onLogout },
         ])
       }
@@ -205,6 +216,79 @@ export const Field = React.forwardRef(function Field(
     </View>
   );
 });
+
+// A date field that opens a calendar instead of taking typed text. value/onChange use
+// 'YYYY-MM-DD' (or '' for no date). Android shows the system calendar dialog; iOS shows an inline
+// calendar in a sheet. minimumDate/maximumDate are also 'YYYY-MM-DD'.
+export function DateField({ label, value, onChange, placeholder = 'Choose date', minimumDate, maximumDate, style }) {
+  const [iosOpen, setIosOpen] = useState(false);
+  const [iosDate, setIosDate] = useState(new Date());
+  const current = value ? ymdToDate(value) : maximumDate ? ymdToDate(maximumDate) : new Date();
+  const limits = {
+    minimumDate: minimumDate ? ymdToDate(minimumDate) : undefined,
+    maximumDate: maximumDate ? ymdToDate(maximumDate) : undefined,
+  };
+
+  function open() {
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: current,
+        mode: 'date',
+        ...limits,
+        onChange: (event, date) => {
+          if (event.type === 'set' && date) onChange(dateToYmd(date));
+        },
+      });
+    } else {
+      setIosDate(current);
+      setIosOpen(true);
+    }
+  }
+
+  return (
+    <View style={[{ gap: 8 }, style]}>
+      {label ? <Text style={type.label}>{label}</Text> : null}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${label || 'Date'}: ${value ? formatYmd(value) : 'not set'}. Opens calendar`}
+        onPress={open}
+        style={({ pressed }) => [styles.inputBox, pressed && styles.inputBoxFocused]}
+      >
+        <Icon name="calendar" size={20} color={colors.ink3} />
+        <Text style={[styles.input, { paddingVertical: 0 }, !value && { color: colors.placeholder }]} numberOfLines={1}>
+          {value ? formatYmd(value) : placeholder}
+        </Text>
+        {value ? (
+          <Pressable accessibilityRole="button" accessibilityLabel={`Clear ${label || 'date'}`} hitSlop={10} onPress={() => onChange('')}>
+            <Icon name="x" size={18} color={colors.ink3} />
+          </Pressable>
+        ) : null}
+      </Pressable>
+      {Platform.OS === 'ios' && (
+        <Sheet
+          visible={iosOpen}
+          onClose={() => setIosOpen(false)}
+          title={label || 'Choose date'}
+          footer={
+            <>
+              <Button title="Cancel" variant="secondary" style={{ flex: 1 }} onPress={() => setIosOpen(false)} />
+              <Button
+                title="Done"
+                style={{ flex: 1 }}
+                onPress={() => {
+                  onChange(dateToYmd(iosDate));
+                  setIosOpen(false);
+                }}
+              />
+            </>
+          }
+        >
+          <DateTimePicker value={iosDate} mode="date" display="inline" {...limits} onChange={(e, date) => date && setIosDate(date)} />
+        </Sheet>
+      )}
+    </View>
+  );
+}
 
 export function SearchField({ value, onChangeText, placeholder }) {
   return (

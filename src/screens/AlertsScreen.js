@@ -1,16 +1,23 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, ScrollView, StyleSheet, TextInput, Alert, Pressable, RefreshControl } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
-import { getLastSyncedAt, getLocalItems } from '../db/localDb';
-import { formatDate, formatMoney, formatPercent, lastSyncedLabel } from '../utils/format';
+import { setLocalCompanyThreshold } from '../db/localDb';
+import { getAlerts } from '../reports/localReports';
+import { runSync } from '../sync/syncEngine';
+import { useLocalRefresh } from '../hooks/useLocalRefresh';
+import LocalDataNotice from '../components/LocalDataNotice';
+import { formatDate, formatMoney, formatPercent } from '../utils/format';
 import Icon from '../components/Icon';
 import {
   Text, Screen, NavHeader, LargeHeader, IconButton, SectionTitle, CountBadge, ListCard, Card, Divider, Pill,
-  Banner, Button, InlineEmpty, Loading, AccountButton,
+  Button, InlineEmpty, Loading, AccountButton,
 } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
+// Low stock and price anomalies, computed from this phone's items and transaction history (so
+// they work offline and include unsynced stock changes). Only saving the anomaly threshold
+// needs a connection, since it's a company setting stored on the server.
 export default function AlertsScreen({ route, navigation }) {
   const { user, logout } = useAuth();
   const companyId = route?.params?.companyId || user.companyId;
@@ -20,35 +27,28 @@ export default function AlertsScreen({ route, navigation }) {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(null);
   const [lowStockItems, setLowStockItems] = useState([]);
   const [priceAnomalies, setPriceAnomalies] = useState([]);
   const [thresholdPercent, setThresholdPercent] = useState(20);
   const [thresholdInput, setThresholdInput] = useState('20');
   const [savingThreshold, setSavingThreshold] = useState(false);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const data = await api.getAlerts(companyId);
-      setLowStockItems(data.lowStockItems);
-      setPriceAnomalies(data.priceAnomalies);
-      setThresholdPercent(data.thresholdPercent);
-      setThresholdInput(String(data.thresholdPercent));
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [companyId]);
+  function load({ keepInput = false } = {}) {
+    const data = getAlerts(companyId);
+    setLowStockItems(data.lowStockItems);
+    setPriceAnomalies(data.priceAnomalies);
+    setThresholdPercent(data.thresholdPercent);
+    if (!keepInput) setThresholdInput(String(data.thresholdPercent));
+    setLoading(false);
+  }
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  // Background syncs refresh the lists without wiping a threshold the user is typing.
+  useLocalRefresh(() => load({ keepInput: true }));
 
   async function handleRefresh() {
     setRefreshing(true);
-    await load();
+    await runSync(user.id);
+    load();
     setRefreshing(false);
   }
 
@@ -61,17 +61,20 @@ export default function AlertsScreen({ route, navigation }) {
     setSavingThreshold(true);
     try {
       await api.updateAlertSettings({ priceAnomalyThresholdPercent: value });
-      await load();
+      setLocalCompanyThreshold(companyId, value);
+      load();
     } catch (err) {
-      Alert.alert('Could not save', err.message);
+      Alert.alert(
+        'Could not save',
+        err.status ? err.message : 'The threshold is saved on the server. Connect to the internet and try again.'
+      );
     } finally {
       setSavingThreshold(false);
     }
   }
 
-  // "Restock" needs the local copy of the item (localId, last purchase price) to record a
-  // transaction, so it's only offered for own-company items already on this device.
-  const localById = new Map(isOwnCompany ? getLocalItems(companyId).map((i) => [i.id, i]) : []);
+  // Low-stock rows are the local item rows themselves; "Restock" records a transaction, so it's
+  // only offered for the user's own company.
 
   const header = asTab ? (
     <LargeHeader eyebrow="Sub company" title="Alerts" right={<AccountButton user={user} onLogout={logout} />} />
@@ -95,9 +98,7 @@ export default function AlertsScreen({ route, navigation }) {
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
       >
-        <Text style={type.caption}>{lastSyncedLabel(getLastSyncedAt(user.id))} · alerts need a connection to refresh</Text>
-
-        {error && <Banner kind="error" title="Couldn't load alerts" subtitle={`Alerts need an internet connection. ${error}`} actionLabel="Retry" onAction={handleRefresh} />}
+        <LocalDataNotice user={user} onSynced={load} />
 
         <SectionTitle title="Low stock" badge={<CountBadge count={lowStockItems.length} kind="danger" />} />
         {lowStockItems.length === 0 ? (
@@ -110,9 +111,9 @@ export default function AlertsScreen({ route, navigation }) {
         ) : (
           <ListCard style={{ marginTop: -6 }}>
             {lowStockItems.map((item, i) => {
-              const local = localById.get(item.id);
+              const local = isOwnCompany ? item : null;
               return (
-                <View key={item.id}>
+                <View key={item.localId}>
                   {i > 0 && <Divider />}
                   <View style={styles.lowRow}>
                     <View style={{ flex: 1, gap: 3 }}>

@@ -1,11 +1,13 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, ScrollView, StyleSheet, RefreshControl, Alert } from 'react-native';
 import { useAuth } from '../context/AuthContext';
-import { api } from '../api/client';
-import { getLastSyncedAt } from '../db/localDb';
+import { getOversightSummary } from '../reports/localReports';
+import { runSync } from '../sync/syncEngine';
+import { useLocalRefresh } from '../hooks/useLocalRefresh';
+import LocalDataNotice from '../components/LocalDataNotice';
 import { exportCsv } from '../utils/csvExport';
-import { formatMoney, formatNumber, lastSyncedLabel } from '../utils/format';
-import { Text, Screen, NavHeader, IconButton, Segmented, Card, BarRow, Banner, Loading } from '../components/ui';
+import { formatMoney, formatNumber } from '../utils/format';
+import { Text, Screen, NavHeader, IconButton, Segmented, Card, BarRow, Loading } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
 const METRICS = [
@@ -19,38 +21,34 @@ const COLUMNS = [
   { key: 'itemCount', label: 'Items', money: false, width: 60 },
   { key: 'lowStockCount', label: 'Low', money: false, width: 48 },
   { key: 'totalSalesRevenue', label: 'Sales', money: true, width: 110 },
+  { key: 'cashSalesRevenue', label: 'Cash', money: true, width: 110 },
+  { key: 'transferSalesRevenue', label: 'Transfer', money: true, width: 110 },
+  { key: 'outstandingDebt', label: 'Owed', money: true, width: 110 },
   { key: 'totalPurchaseCost', label: 'Purchases', money: true, width: 110 },
   { key: 'margin', label: 'Margin', money: true, width: 110 },
 ];
 
 // RPT-07: side-by-side view of the Main Company and every linked Sub Company, by metric.
-// Own row is included and labeled, for full oversight.
+// Own row is included and labeled, for full oversight. Computed from this phone's data, so it
+// works offline.
 export default function CompareSubCompaniesScreen() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [metric, setMetric] = useState('margin');
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      setData(await api.getOversightSummary());
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  function load() {
+    setData(getOversightSummary(user));
+    setLoading(false);
+  }
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useLocalRefresh(load);
 
   async function handleRefresh() {
     setRefreshing(true);
-    await load();
+    await runSync(user.id);
+    load();
     setRefreshing(false);
   }
 
@@ -65,6 +63,9 @@ export default function CompareSubCompaniesScreen() {
         { key: 'itemCount', label: 'Items' },
         { key: 'lowStockCount', label: 'Low Stock' },
         { key: 'totalSalesRevenue', label: 'Sales Revenue' },
+        { key: 'cashSalesRevenue', label: 'Cash Sales' },
+        { key: 'transferSalesRevenue', label: 'Transfer Sales' },
+        { key: 'outstandingDebt', label: 'Owed By Customers' },
         { key: 'totalPurchaseCost', label: 'Purchase Cost' },
         { key: 'margin', label: 'Margin' },
       ]);
@@ -96,8 +97,7 @@ export default function CompareSubCompaniesScreen() {
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
       >
-        <Text style={type.caption}>{lastSyncedLabel(getLastSyncedAt(user.id))}</Text>
-        {error && <Banner kind="error" title="Comparison needs a connection" subtitle={error} actionLabel="Retry" onAction={handleRefresh} />}
+        <LocalDataNotice user={user} onSynced={load} />
 
         {data && (
           <>

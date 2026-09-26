@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Alert } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as Network from 'expo-network';
@@ -7,14 +7,38 @@ import { getPendingCount, clearLocalData } from '../db/localDb';
 import { runSync } from '../sync/syncEngine';
 import { isTokenExpired } from '../utils/jwt';
 import { ROLES } from '../constants/roles';
+import {
+  fingerprintAvailable,
+  getFingerprintUser,
+  confirmFingerprint,
+  registerFingerprint,
+  signInWithFingerprint,
+  turnOffFingerprint as turnOffStoredFingerprint,
+} from '../auth/biometrics';
+import { clearSubscriptionReminders } from '../subscription/reminders';
 
 // AUTH-02: token is cached locally (SecureStore) so the user stays logged in and can keep
 // using the app offline after the first successful login.
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null); // { id, name, email, role, companyId }
+  const [user, setUser] = useState(null); // { id, name, email, role, companyId, company: { allowSubCompanies } }
   const [loading, setLoading] = useState(true);
+  // Whether the signed-in user can log in with their fingerprint on this phone.
+  const [fingerprintEnabled, setFingerprintEnabled] = useState(false);
+  // Set by a deliberate logout so the login screen doesn't pop the fingerprint prompt straight away.
+  const justLoggedOut = useRef(false);
+
+  function shouldAutoPromptFingerprint() {
+    const skip = justLoggedOut.current;
+    justLoggedOut.current = false;
+    return !skip;
+  }
+
+  useEffect(() => {
+    if (!user) return;
+    getFingerprintUser().then((registered) => setFingerprintEnabled(!!registered && registered.id === user.id));
+  }, [user]);
 
   useEffect(() => {
     (async () => {
@@ -31,7 +55,10 @@ export function AuthProvider({ children }) {
         } else {
           const parsedUser = JSON.parse(cachedUser);
           setUser(parsedUser);
-          runSync(parsedUser.id); // AUTH-04: push any backlog left from an unclean exit right away
+          if (online) refreshCompany(parsedUser);
+          // AUTH-04: push any backlog left from an unclean exit right away. The SuperAdmin
+          // doesn't keep inventory on the device, so it never syncs.
+          if (parsedUser.role !== ROLES.SUPER) runSync(parsedUser.id);
         }
       }
       setLoading(false);
@@ -44,6 +71,10 @@ export function AuthProvider({ children }) {
     setUnauthorizedHandler(async (code) => {
       await SecureStore.deleteItemAsync('cachedUser');
       setUser(null);
+      if (code === 'ACCOUNT_DISABLED') {
+        Alert.alert('Account deactivated', 'Your account has been deactivated. Ask your company admin if you need access again.');
+        return;
+      }
       Alert.alert(
         code === 'TOKEN_EXPIRED' ? 'Session expired' : 'Authentication error',
         code === 'TOKEN_EXPIRED'
@@ -53,16 +84,95 @@ export function AuthProvider({ children }) {
     });
   }, []);
 
-  async function login(email, password) {
-    const { token, user: loggedInUser } = await api.login(email, password);
+  // Admin status, name and company settings (e.g. whether Sub Companies are allowed) can change
+  // on the server at any time, so a restored session re-reads them rather than trusting the copy
+  // cached at login. A deactivated account gets a 401 here and is logged out by the handler above.
+  async function refreshCompany(currentUser) {
+    try {
+      const { user: fresh } = await api.getMe();
+      if (!fresh || fresh.id !== currentUser.id) return;
+      const updated = { ...currentUser, ...fresh };
+      await SecureStore.setItemAsync('cachedUser', JSON.stringify(updated));
+      setUser((u) => (u && u.id === updated.id ? updated : u));
+    } catch {
+      // Offline or transient — keep the cached value.
+    }
+  }
+
+  async function startSession(token, loggedInUser) {
     await saveToken(token);
     await SecureStore.setItemAsync('cachedUser', JSON.stringify(loggedInUser));
     setUser(loggedInUser);
-    runSync(loggedInUser.id); // AUTH-04: sync any backlog belonging to this user immediately
+    // AUTH-04: sync any backlog belonging to this user immediately.
+    if (loggedInUser.role !== ROLES.SUPER) runSync(loggedInUser.id);
     return loggedInUser;
   }
 
+  async function login(email, password) {
+    const { token, user: loggedInUser } = await api.login(email.trim(), password);
+    await startSession(token, loggedInUser);
+    offerFingerprint(loggedInUser);
+    return loggedInUser;
+  }
+
+  // Resolves null if the user cancels the fingerprint scan.
+  async function loginWithFingerprint() {
+    const session = await signInWithFingerprint();
+    if (!session) return null;
+    return startSession(session.token, session.user);
+  }
+
+  // After a successful password login: if this phone has a fingerprint enrolled and this account
+  // isn't set up for fingerprint login here yet, offer to set it up. "Not now" asks again after
+  // the next password login.
+  async function offerFingerprint(loggedInUser) {
+    if (!(await fingerprintAvailable())) return;
+    const registered = await getFingerprintUser();
+    if (registered && registered.id === loggedInUser.id) return;
+
+    const replaces = registered ? ` This replaces fingerprint login for ${registered.email} on this phone.` : '';
+    Alert.alert(
+      'Log in with your fingerprint?',
+      `Next time, you can log in with your fingerprint instead of typing your password.${replaces}`,
+      [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Use fingerprint', onPress: () => enableFingerprint(loggedInUser) },
+      ]
+    );
+  }
+
+  async function enableFingerprint(forUser = user) {
+    try {
+      const ok = await confirmFingerprint('Scan your fingerprint to turn on fingerprint login');
+      if (!ok) return;
+      await registerFingerprint(forUser);
+      setFingerprintEnabled(true);
+      Alert.alert('Fingerprint login is on', 'Next time, tap "Log in with fingerprint" on the login screen.');
+    } catch (err) {
+      Alert.alert(
+        "Couldn't turn on fingerprint login",
+        err.status ? err.message : 'This needs an internet connection. You can turn it on after your next password login.'
+      );
+    }
+  }
+
+  function turnOffFingerprint() {
+    Alert.alert('Turn off fingerprint login?', "You'll log in with your email and password on this phone.", [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Turn off',
+        style: 'destructive',
+        onPress: async () => {
+          await turnOffStoredFingerprint();
+          setFingerprintEnabled(false);
+        },
+      },
+    ]);
+  }
+
   async function performLogout() {
+    justLoggedOut.current = true;
+    clearSubscriptionReminders();
     await clearToken();
     await SecureStore.deleteItemAsync('cachedUser');
     clearLocalData();
@@ -85,10 +195,30 @@ export function AuthProvider({ children }) {
     performLogout();
   }
 
+  const isSuperAdmin = user?.role === ROLES.SUPER;
   const isMainCompany = user?.role === ROLES.MAIN;
+  // Company admins manage users, items, reports and settings; regular users record sales/stock
+  // and see debtors. Sessions cached before this existed belonged to the company's only user,
+  // its admin; the server enforces the real value either way.
+  const isCompanyAdmin = !!user && user.isCompanyAdmin !== false;
+  // Stock in and sales are paused for the whole company once its free trial / paid subscription
+  // has ended (unless it's free). Decided from the end date the server sent at login/refresh and
+  // this phone's clock, so it also applies offline. The server enforces the same rule.
+  const subscription = user?.subscription || null;
+  const subscriptionBlocked = !!(
+    subscription && subscription.status !== 'free' && subscription.endsAt && Date.now() > new Date(subscription.endsAt).getTime()
+  );
+  const refreshUser = () => (user ? refreshCompany(user) : Promise.resolve());
+  // Sessions cached before this flag existed have no company info; the server still enforces it.
+  const allowSubCompanies = isMainCompany && isCompanyAdmin && user?.company?.allowSubCompanies !== false;
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, isMainCompany }}>
+    <AuthContext.Provider
+      value={{
+        user, loading, login, loginWithFingerprint, logout, isMainCompany, isSuperAdmin, isCompanyAdmin, allowSubCompanies,
+        fingerprintEnabled, turnOffFingerprint, shouldAutoPromptFingerprint, subscriptionBlocked, refreshUser,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

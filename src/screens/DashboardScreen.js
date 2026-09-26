@@ -1,62 +1,51 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, ScrollView, Pressable, StyleSheet, RefreshControl } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
-import { api } from '../api/client';
-import { getLocalItems, getLastSyncedAt, getSyncStatusSummary } from '../db/localDb';
+import { getLocalItems, getLastSyncedAt, getSyncStatusSummary, getLocalSubCompanies } from '../db/localDb';
+import { getOversightSummary, getDebtors } from '../reports/localReports';
+import { useLocalRefresh } from '../hooks/useLocalRefresh';
+import { useOnline } from '../hooks/useOnline';
 import { runSync } from '../sync/syncEngine';
 import { isLowStock } from '../utils/inventory';
 import { formatMoney, formatNumber, lastSyncedLabel, plural, timeAgo } from '../utils/format';
 import Icon from '../components/Icon';
 import {
-  Text, Screen, LargeHeader, IconButton, AccountButton, Pill, Banner, SectionTitle, ListCard, Divider,
+  Text, Screen, LargeHeader, IconButton, AccountButton, Pill, SectionTitle, ListCard, Divider,
   LetterTile, EmptyState, Loading,
 } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
 // RPT-06: Main Company dashboard. If there are no linked Sub Companies, this simply shows
 // an empty state below — a standalone company (ROLE-07) is not treated as an error state.
+// Everything here is computed from this phone's database (companies, items, and transactions
+// pulled by sync, plus unsynced local changes), so it works the same offline.
 export default function DashboardScreen({ navigation }) {
-  const { user, logout } = useAuth();
+  const { user, logout, allowSubCompanies } = useAuth();
   const [subCompanies, setSubCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(null);
   const [lowStockCount, setLowStockCount] = useState(0);
   const [syncSummary, setSyncSummary] = useState({ total: 0 });
   const [summary, setSummary] = useState(null);
+  const [debt, setDebt] = useState(null);
+  const online = useOnline();
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const [{ subCompanies: subs }, summaryResp] = await Promise.all([api.getMyCompany(), api.getOversightSummary()]);
-      setSubCompanies(subs);
-      setSummary(summaryResp);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  function load() {
+    setSubCompanies(getLocalSubCompanies(user.companyId));
+    setSummary(getOversightSummary(user));
+    setDebt(getDebtors(user.companyId).totals);
+    // INV-05: own-company low-stock count only — not aggregated across Sub Companies.
+    setLowStockCount(getLocalItems(user.companyId).filter(isLowStock).length);
+    setSyncSummary(getSyncStatusSummary(user.id));
+    setLoading(false);
+  }
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  // INV-05: own-company low-stock count only — not aggregated across Sub Companies.
-  useFocusEffect(
-    useCallback(() => {
-      setLowStockCount(getLocalItems(user.companyId).filter(isLowStock).length);
-      setSyncSummary(getSyncStatusSummary(user.id));
-    }, [user.companyId, user.id])
-  );
+  useLocalRefresh(load);
 
   async function handleRefresh() {
     setRefreshing(true);
     await runSync(user.id);
-    await load();
-    setSyncSummary(getSyncStatusSummary(user.id));
-    setLowStockCount(getLocalItems(user.companyId).filter(isLowStock).length);
+    load();
     setRefreshing(false);
   }
 
@@ -90,11 +79,27 @@ export default function DashboardScreen({ navigation }) {
           ) : (
             <Pill kind="ok" icon="check" label={lastSynced ? `All synced · ${timeAgo(lastSynced)}` : 'Not yet synced'} />
           )}
-          <Text style={type.caption}>Pull down to refresh</Text>
+          <Text style={type.caption}>{online ? 'Pull down to refresh' : 'Offline · data on this phone'}</Text>
         </View>
 
-        {error && (
-          <Banner kind="error" icon="alert" title="Couldn't load company data" subtitle={`Are you offline? ${error}`} actionLabel="Retry" onAction={load} />
+        {debt && debt.outstanding > 0 && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityHint="Opens the list of people owing"
+            onPress={() => navigation.navigate('Debtors')}
+            style={({ pressed }) => [styles.debtRow, pressed && { backgroundColor: colors.surfaceMuted }]}
+          >
+            <Icon name="wallet" size={20} color={colors.danger} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.debtTitle}>{formatMoney(debt.outstanding)} owed to you</Text>
+              <Text style={type.caption}>{plural(debt.customersOwing, 'customer')} owing · tap to see who</Text>
+            </View>
+            <Icon name="chev" size={18} color={colors.chevron} />
+          </Pressable>
+        )}
+
+        {syncSummary.total > 0 && (
+          <Text style={type.caption}>Figures below include the changes from this phone that haven't synced yet.</Text>
         )}
 
         {totals && (
@@ -149,71 +154,79 @@ export default function DashboardScreen({ navigation }) {
           </View>
         )}
 
-        <SectionTitle
-          title="Sub companies"
-          right={
-            <View style={{ flexDirection: 'row' }}>
-              <Pressable accessibilityRole="button" onPress={() => navigation.navigate('CompareSubCompanies')} style={styles.headerLink}>
-                <Text style={styles.link}>Compare</Text>
-              </Pressable>
-              <Pressable accessibilityRole="button" onPress={() => navigation.navigate('ManageSubCompanies')} style={styles.headerLink}>
-                <Text style={styles.link}>Manage</Text>
-              </Pressable>
-            </View>
-          }
-        />
-
-        {subCompanies.length === 0 ? (
-          <ListCard>
-            <EmptyState
-              icon="building"
-              title="No Sub Companies linked yet"
-              body="You're using this app as a standalone company. Everything works the same whether or not you ever link a Sub Company."
+        {/* A company the SuperAdmin set up without Sub Companies doesn't see this section at all;
+            if the option is turned off later, existing Sub Companies stay viewable. */}
+        {(allowSubCompanies || subCompanies.length > 0) && (
+          <>
+            <SectionTitle
+              title="Sub companies"
+              right={
+                allowSubCompanies && (
+                  <View style={{ flexDirection: 'row' }}>
+                    <Pressable accessibilityRole="button" onPress={() => navigation.navigate('CompareSubCompanies')} style={styles.headerLink}>
+                      <Text style={styles.link}>Compare</Text>
+                    </Pressable>
+                    <Pressable accessibilityRole="button" onPress={() => navigation.navigate('ManageSubCompanies')} style={styles.headerLink}>
+                      <Text style={styles.link}>Manage</Text>
+                    </Pressable>
+                  </View>
+                )
+              }
             />
-          </ListCard>
-        ) : (
-          <ListCard style={{ marginTop: -8 }}>
-            {subCompanies.map((c, i) => {
-              const stats = statsById.get(String(c.id));
-              return (
-                <View key={String(c.id)}>
-                  {i > 0 && <Divider />}
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityHint="Opens a read-only view of this company"
-                    onPress={() => navigation.navigate('CompanyInventory', { companyId: c.id, companyName: c.name })}
-                    style={({ pressed }) => [styles.subRow, pressed && { backgroundColor: colors.surfaceMuted }]}
-                  >
-                    <LetterTile label={c.name} muted={!c.isActive} />
-                    <View style={{ flex: 1, gap: 3 }}>
-                      <Text style={[styles.subName, !c.isActive && { color: colors.ink2 }]} numberOfLines={1}>
-                        {c.name}
-                      </Text>
-                      {c.isActive ? (
-                        <Text style={type.small} numberOfLines={1}>
-                          {stats ? `${plural(stats.itemCount, 'item')} · ` : ''}
-                          {stats ? (
-                            <Text style={[type.small, stats.lowStockCount > 0 && styles.lowText]}>{stats.lowStockCount} low stock</Text>
+
+            {subCompanies.length === 0 ? (
+              <ListCard>
+                <EmptyState
+                  icon="building"
+                  title="No Sub Companies linked yet"
+                  body="You're using this app as a standalone company. Everything works the same whether or not you ever link a Sub Company."
+                />
+              </ListCard>
+            ) : (
+              <ListCard style={{ marginTop: -8 }}>
+                {subCompanies.map((c, i) => {
+                  const stats = statsById.get(String(c.id));
+                  return (
+                    <View key={String(c.id)}>
+                      {i > 0 && <Divider />}
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityHint="Opens a read-only view of this company"
+                        onPress={() => navigation.navigate('CompanyInventory', { companyId: c.id, companyName: c.name })}
+                        style={({ pressed }) => [styles.subRow, pressed && { backgroundColor: colors.surfaceMuted }]}
+                      >
+                        <LetterTile label={c.name} muted={!c.isActive} />
+                        <View style={{ flex: 1, gap: 3 }}>
+                          <Text style={[styles.subName, !c.isActive && { color: colors.ink2 }]} numberOfLines={1}>
+                            {c.name}
+                          </Text>
+                          {c.isActive ? (
+                            <Text style={type.small} numberOfLines={1}>
+                              {stats ? `${plural(stats.itemCount, 'item')} · ` : ''}
+                              {stats ? (
+                                <Text style={[type.small, stats.lowStockCount > 0 && styles.lowText]}>{stats.lowStockCount} low stock</Text>
+                              ) : (
+                                'Active'
+                              )}
+                            </Text>
                           ) : (
-                            'Active'
+                            <Text style={type.small}>Deactivated</Text>
                           )}
-                        </Text>
-                      ) : (
-                        <Text style={type.small}>Deactivated</Text>
-                      )}
+                        </View>
+                        {stats && (
+                          <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                            <Text style={[styles.subMargin, stats.margin < 0 && { color: colors.danger }]}>{formatMoney(stats.margin)}</Text>
+                            <Text style={type.caption}>margin</Text>
+                          </View>
+                        )}
+                        <Icon name="chev" size={18} color={colors.chevron} />
+                      </Pressable>
                     </View>
-                    {stats && (
-                      <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                        <Text style={[styles.subMargin, stats.margin < 0 && { color: colors.danger }]}>{formatMoney(stats.margin)}</Text>
-                        <Text style={type.caption}>margin</Text>
-                      </View>
-                    )}
-                    <Icon name="chev" size={18} color={colors.chevron} />
-                  </Pressable>
-                </View>
-              );
-            })}
-          </ListCard>
+                  );
+                })}
+              </ListCard>
+            )}
+          </>
         )}
       </ScrollView>
     </Screen>
@@ -223,6 +236,11 @@ export default function DashboardScreen({ navigation }) {
 const styles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingBottom: 32, gap: 16 },
   syncRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  debtRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 16,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line,
+  },
+  debtTitle: { fontFamily: fonts.semibold, fontSize: 15 },
   hero: { backgroundColor: colors.ink, borderRadius: 22, padding: 20, gap: 14 },
   heroTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   heroLabel: { fontFamily: fonts.medium, fontSize: 13, color: colors.onDarkMuted },

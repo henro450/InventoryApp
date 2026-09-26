@@ -9,6 +9,9 @@ import { colors, fonts } from '../theme';
 const FRAME_W = 264;
 const FRAME_H = 220;
 
+// QR codes plus the common linear (1D) product and carton barcodes.
+const BARCODE_TYPES = ['qr', 'ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'code93', 'itf14', 'codabar'];
+
 export default function ScanBarcodeScreen({ navigation, route }) {
   const { onScanned } = route.params || {};
   const insets = useSafeAreaInsets();
@@ -73,7 +76,7 @@ export default function ScanBarcodeScreen({ navigation, route }) {
       <CameraView
         style={StyleSheet.absoluteFillObject}
         enableTorch={torch}
-        barcodeScannerSettings={{ barcodeTypes: ['qr', 'ean13', 'ean8', 'upc_a', 'code128', 'code39'] }}
+        barcodeScannerSettings={{ barcodeTypes: BARCODE_TYPES }}
         onBarcodeScanned={handleBarcodeScanned}
       />
       {topBar}
