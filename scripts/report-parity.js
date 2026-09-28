@@ -142,6 +142,16 @@ function expectClose(label, local, server) {
   // Part payments: part-paid by transfer, then fully on credit, then repayments by cash/transfer.
   await tx(b.id, 'out', 2, 60, 8, 'transfer', { amountPaid: 50, customerName: 'Parity Customer', customerPhone: `+234 ${phone.slice(1)}` });
   await tx(a.id, 'out', 1, 140, 9, 'cash', { amountPaid: 0, customerName: 'Parity Customer', customerPhone: phone });
+  // A multi-item sale: two lines sharing a saleId, part-paid (split across the lines by the API),
+  // which Debtors counts as one credit sale.
+  await call('POST', '/transactions/sales', {
+    saleId: `par-sale-${stamp}`,
+    lines: [
+      { clientTransactionId: `par-${stamp}-sale-a`, itemId: a.id, quantity: 2, unitPrice: 145 },
+      { clientTransactionId: `par-${stamp}-sale-b`, itemId: b.id, quantity: 1 },
+    ],
+    paymentMethod: 'cash', amountPaid: 100, customerName: 'Parity Customer', customerPhone: phone, occurredAt: day(9),
+  });
   await repay(10, phone, 30, 'cash');
   await repay(11, phone, 40, 'transfer');
 
@@ -210,7 +220,7 @@ function expectClose(label, local, server) {
   );
   for (const k of ['outstanding', 'customersOwing', 'totalRepaid']) expectClose(`debtors totals ${k}`, mineDebtors.totals[k], serverDebtors.totals[k]);
   const thisCustomer = mineDebtors.customers.find((c) => c.customerPhone === phone);
-  expectClose('parity customer balance (120-50 + 140 - 70)', thisCustomer?.balance, 140);
+  expectClose('parity customer balance (120-50 + 140 + (290+40)-100 - 70)', thisCustomer?.balance, 370);
 
   // Discrepancies
   const disc = await call('GET', `/reports/discrepancies?companyId=${own}`);
