@@ -21,6 +21,8 @@ export function lineCalc(line) {
   if (onHand <= 0) error = 'Out of stock. Remove this item or record a stock-in first.';
   else if (qty > onHand) error = `Only ${formatNumber(onHand)} ${item.unit} available`;
   else if (qty <= 0) error = 'Enter a quantity';
+  // The item's "Allow decimal" setting can change (e.g. by a sync) while the sale is open.
+  else if (!item.allowDecimal && !Number.isInteger(qty)) error = `${item.name} is sold in whole ${item.unit}. Enter a whole number.`;
   else if (price === null) error = 'No purchase price on record. Enter a sale price.';
   return { qty, price, priceWasDefaulted, total, error };
 }

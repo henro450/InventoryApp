@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Pressable, TextInput, StyleSheet } from 'react-native';
 import Icon from './Icon';
 import { Text, ListCard, LetterTile, IconButton, CountBadge } from './ui';
-import { formatMoney, formatNumber, cleanNumberInput, groupDigits } from '../utils/format';
+import { formatMoney, formatNumber, cleanNumberInput, cleanQuantityInput, quantityStep, groupDigits } from '../utils/format';
 import { colors, fonts, type } from '../theme';
 
 // The items in a sale (stock out): one row per item with its quantity and optional sale price.
@@ -59,6 +59,8 @@ export default function SaleLines({ lines, calcs, onChange, onRemove, onAdd }) {
 function SaleLine({ line, calc, first, onChange, onRemove }) {
   const { item } = line;
   const qty = Number(line.quantity) || 0;
+  const step = quantityStep(item); // 0.5 for items that allow decimals, else 1
+  const stepTo = (next) => onChange({ quantity: String(Math.round(next * 100) / 100) });
   const hasDefault = item.lastPurchasePrice !== null && item.lastPurchasePrice !== undefined;
   return (
     <View style={[styles.line, !first && styles.lineBorder, calc.error && { backgroundColor: colors.dangerSoft }]}>
@@ -83,13 +85,13 @@ function SaleLine({ line, calc, first, onChange, onRemove }) {
             variant="muted"
             size={36}
             iconSize={16}
-            disabled={qty <= 1}
-            onPress={() => onChange({ quantity: String(Math.max(1, qty - 1)) })}
+            disabled={qty - step <= 0}
+            onPress={() => stepTo(Math.max(step, qty - step))}
           />
           <TextInput
-            value={groupDigits(cleanNumberInput(line.quantity, { decimal: false }))}
-            onChangeText={(t) => onChange({ quantity: cleanNumberInput(t, { decimal: false }) })}
-            keyboardType="number-pad"
+            value={groupDigits(cleanQuantityInput(line.quantity, item.allowDecimal))}
+            onChangeText={(t) => onChange({ quantity: cleanQuantityInput(t, item.allowDecimal) })}
+            keyboardType={item.allowDecimal ? 'decimal-pad' : 'number-pad'}
             selectTextOnFocus
             placeholder="0"
             placeholderTextColor={colors.placeholder}
@@ -102,7 +104,7 @@ function SaleLine({ line, calc, first, onChange, onRemove }) {
             variant="muted"
             size={36}
             iconSize={16}
-            onPress={() => onChange({ quantity: String(qty + 1) })}
+            onPress={() => stepTo(qty + step)}
           />
         </View>
         <View style={styles.priceBox}>

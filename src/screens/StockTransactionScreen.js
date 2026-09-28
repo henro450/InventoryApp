@@ -6,7 +6,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { saveLocalStockTransaction, saveLocalSale, getLocalItemByLocalId, getLocalItems } from '../db/localDb';
 import { useAuth } from '../context/AuthContext';
 import { runSync } from '../sync/syncEngine';
-import { formatMoney, formatNumber } from '../utils/format';
+import { formatMoney, formatNumber, quantityStep } from '../utils/format';
 import { formatPhone } from '../utils/phone';
 import { saleTotals, splitAmountPaid } from '../utils/sale';
 import Icon from '../components/Icon';
@@ -116,6 +116,10 @@ export default function StockTransactionScreen({ route, navigation }) {
 
     const current = getLocalItemByLocalId(item.localId) || item;
     setItem(current);
+    if (!current.allowDecimal && !Number.isInteger(qty)) {
+      Alert.alert('Whole numbers only', `${current.name} is counted in whole ${current.unit}. Turn on "Allow decimal quantities" on the item to record ${formatNumber(qty)}.`);
+      return;
+    }
 
     const localTransaction = {
       clientTransactionId: uuidv4(),
@@ -159,7 +163,7 @@ export default function StockTransactionScreen({ route, navigation }) {
   }
 
   // Scan from the picker: a match is added to the sale (or, if it's already in the sale, its
-  // quantity goes up by one, so scanning the same thing twice counts two).
+  // quantity goes up by one step — 1, or 0.5 for items that allow decimals).
   function scanIntoSale() {
     setPickerOpen(false);
     navigation.navigate('ScanBarcode', {
@@ -177,7 +181,8 @@ export default function StockTransactionScreen({ route, navigation }) {
         setLines((ls) => {
           const existing = ls.find((l) => l.item.localId === match.localId);
           if (!existing) return [...ls, newLine(match)];
-          return ls.map((l) => (l === existing ? { ...l, quantity: String((Number(l.quantity) || 0) + 1) } : l));
+          const next = Math.round(((Number(existing.quantity) || 0) + quantityStep(match)) * 100) / 100;
+          return ls.map((l) => (l === existing ? { ...l, quantity: String(next) } : l));
         });
       },
     });
@@ -413,7 +418,14 @@ export default function StockTransactionScreen({ route, navigation }) {
 
           {typePicker}
 
-          <Stepper big label={type === 'adjustment' ? 'New counted quantity' : 'Quantity received'} value={quantity} onChange={setQuantity} />
+          <Stepper
+            big
+            label={type === 'adjustment' ? 'New counted quantity' : 'Quantity received'}
+            value={quantity}
+            onChange={setQuantity}
+            decimal={!!item.allowDecimal}
+            step={quantityStep(item)}
+          />
 
           {type === 'in' && (
             <Field

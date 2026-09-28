@@ -16,7 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Icon from './Icon';
 import { colors, fonts, radius, type, shadow } from '../theme';
-import { initials, dateToYmd, ymdToDate, formatYmd, cleanNumberInput, groupDigits } from '../utils/format';
+import { initials, dateToYmd, ymdToDate, formatYmd, cleanNumberInput, cleanQuantityInput, groupDigits } from '../utils/format';
 
 const NUMBER_KEYBOARDS = new Set(['decimal-pad', 'number-pad', 'numeric']);
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
@@ -455,18 +455,20 @@ export function Stat({ label, value, align = 'left' }) {
   );
 }
 
-export function Stepper({ value, onChange, label, big = false, focusedRing = false, decimal = false }) {
+// `step` is how far − / + move the value (0.5 for items that allow decimals). With `decimal`,
+// typing takes a point and up to 2 decimal places.
+export function Stepper({ value, onChange, label, big = false, focusedRing = false, decimal = false, step: stepBy = 1 }) {
   const num = Number(value) || 0;
-  const step = (d) => onChange(String(Math.max(0, num + d)));
+  const step = (d) => onChange(String(Math.max(0, Math.round((num + d) * 100) / 100)));
   const btnSize = big ? 52 : 52;
   return (
     <View style={{ gap: 8 }}>
       {label ? <Text style={type.label}>{label}</Text> : null}
       <View style={[styles.stepper, big && styles.stepperBig, focusedRing && styles.inputBoxFocused]}>
-        <IconButton icon="minus" label={`Decrease ${label || 'value'}`} variant="muted" size={btnSize} onPress={() => step(-1)} disabled={num <= 0} />
+        <IconButton icon="minus" label={`Decrease ${label || 'value'}`} variant="muted" size={btnSize} onPress={() => step(-stepBy)} disabled={num <= 0} />
         <TextInput
-          value={groupDigits(cleanNumberInput(value, { decimal }))}
-          onChangeText={(t) => onChange(cleanNumberInput(t, { decimal }))}
+          value={groupDigits(cleanQuantityInput(value, decimal))}
+          onChangeText={(t) => onChange(cleanQuantityInput(t, decimal))}
           keyboardType={decimal ? 'decimal-pad' : 'number-pad'}
           placeholder="0"
           placeholderTextColor={colors.placeholder}
@@ -474,9 +476,31 @@ export function Stepper({ value, onChange, label, big = false, focusedRing = fal
           selectTextOnFocus
           style={[styles.stepperInput, big && { fontSize: 32 }]}
         />
-        <IconButton icon="plus" label={`Increase ${label || 'value'}`} variant="muted" size={btnSize} onPress={() => step(1)} />
+        <IconButton icon="plus" label={`Increase ${label || 'value'}`} variant="muted" size={btnSize} onPress={() => step(stepBy)} />
       </View>
     </View>
+  );
+}
+
+export function Checkbox({ label, hint, checked, onChange, disabled = false }) {
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked, disabled }}
+      accessibilityLabel={label}
+      accessibilityHint={hint}
+      onPress={() => onChange(!checked)}
+      disabled={disabled}
+      style={({ pressed }) => [styles.checkboxRow, (pressed || disabled) && { opacity: 0.6 }]}
+    >
+      <View style={[styles.checkbox, checked && styles.checkboxOn]}>
+        {checked ? <Icon name="check" size={16} color="#FFFFFF" strokeWidth={2.6} /> : null}
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={type.bodyStrong}>{label}</Text>
+        {hint ? <Text style={type.caption}>{hint}</Text> : null}
+      </View>
+    </Pressable>
   );
 }
 
@@ -696,6 +720,12 @@ const styles = StyleSheet.create({
     minWidth: 88, flexGrow: 1, height: 52, textAlign: 'center', fontFamily: fonts.display, fontSize: 22,
     color: colors.ink, borderRadius: 12, paddingVertical: 0,
   },
+  checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, minHeight: 44, paddingVertical: 4 },
+  checkbox: {
+    width: 26, height: 26, borderRadius: 8, borderWidth: 1.5, borderColor: colors.lineStrong, backgroundColor: colors.surface,
+    alignItems: 'center', justifyContent: 'center', marginTop: -2,
+  },
+  checkboxOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   bottomBar: { paddingHorizontal: 20, paddingTop: 14, backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.line, gap: 10 },
   banner: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, paddingLeft: 14, paddingRight: 8, borderRadius: 16, minHeight: 56 },
   bannerTitle: { fontFamily: fonts.semibold, fontSize: 14 },

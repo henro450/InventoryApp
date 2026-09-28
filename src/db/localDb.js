@@ -128,6 +128,7 @@ export function initLocalDb() {
   tryAddColumn('items', 'retryCount INTEGER DEFAULT 0');
   tryAddColumn('items', 'nextRetryAt TEXT');
   tryAddColumn('items', 'version INTEGER DEFAULT 1');
+  tryAddColumn('items', 'allowDecimal INTEGER DEFAULT 0'); // 1 = stock can be recorded as e.g. 2.5
   tryAddColumn('stock_transactions', 'retryCount INTEGER DEFAULT 0');
   tryAddColumn('stock_transactions', 'nextRetryAt TEXT');
   tryAddColumn('stock_transactions', 'id INTEGER'); // server id once pulled
@@ -224,14 +225,15 @@ export function setSyncCursor(userId, cursor) {
 // --- Items ---
 export function upsertLocalItem(item) {
   db.runSync(
-    `INSERT INTO items (id, localId, clientItemId, sku, name, category, unit, companyId, quantityOnHand, lowStockThreshold, lastPurchasePrice, version, updatedAt, syncStatus, userId, isActive)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO items (id, localId, clientItemId, sku, name, category, unit, companyId, quantityOnHand, lowStockThreshold, lastPurchasePrice, version, updatedAt, syncStatus, userId, isActive, allowDecimal)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(localId) DO UPDATE SET
        id=excluded.id, clientItemId=excluded.clientItemId, sku=excluded.sku, name=excluded.name,
        category=excluded.category, unit=excluded.unit, companyId=excluded.companyId,
        quantityOnHand=excluded.quantityOnHand, lowStockThreshold=excluded.lowStockThreshold,
        lastPurchasePrice=excluded.lastPurchasePrice, version=excluded.version, updatedAt=excluded.updatedAt,
-       syncStatus=excluded.syncStatus, userId=excluded.userId, isActive=excluded.isActive`,
+       syncStatus=excluded.syncStatus, userId=excluded.userId, isActive=excluded.isActive,
+       allowDecimal=excluded.allowDecimal`,
     [
       item.id ?? null,
       item.localId,
@@ -249,6 +251,7 @@ export function upsertLocalItem(item) {
       item.syncStatus ?? 'synced',
       item.userId ?? null,
       item.isActive === undefined || item.isActive === null ? 1 : (item.isActive ? 1 : 0),
+      item.allowDecimal ? 1 : 0,
     ]
   );
 }
@@ -287,6 +290,7 @@ function itemOperation(item) {
         category: item.category,
         unit: item.unit,
         lowStockThreshold: item.lowStockThreshold,
+        allowDecimal: !!item.allowDecimal,
       }
     : {
         id: item.id,
@@ -294,6 +298,7 @@ function itemOperation(item) {
         category: item.category,
         unit: item.unit,
         lowStockThreshold: item.lowStockThreshold,
+        allowDecimal: !!item.allowDecimal,
       };
 
   return { operationType, payload };
