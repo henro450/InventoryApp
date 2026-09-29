@@ -64,6 +64,16 @@ function purchasePoints(transactions, companyId) {
   return byItem;
 }
 
+// The purchase price in effect at time t (the latest stock-in at or before it), or null.
+function purchasePriceAt(history, t) {
+  let price = null;
+  for (const p of history || []) {
+    if (p.t <= t) price = p;
+    else break;
+  }
+  return price;
+}
+
 // RPT-01
 export function stockOnHand(items, companyId, { category, itemId } = {}) {
   return items
@@ -124,7 +134,7 @@ export function debtors(transactions, payments, companyId) {
   const byPhone = new Map();
   const customer = (phone, name, at) => {
     if (!byPhone.has(phone)) {
-      byPhone.set(phone, { customerPhone: phone, customerName: name, totalOwed: 0, totalRepaid: 0, creditSales: 0, lastActivityAt: at });
+      byPhone.set(phone, { customerPhone: phone, customerName: name, totalOwed: 0, totalRepaid: 0, creditSales: 0, lastActivityAt: at, saleKeys: new Set() });
     }
     const c = byPhone.get(phone);
     if (time(at) >= time(c.lastActivityAt)) {
@@ -141,7 +151,8 @@ export function debtors(transactions, payments, companyId) {
     if (owed <= 0) continue;
     const c = customer(tx.customerPhone, tx.customerName, tx.occurredAt);
     c.totalOwed += owed;
-    c.creditSales += 1;
+    // The rows of one multi-item sale share a saleId and count as one sale.
+    c.saleKeys.add(tx.saleId || tx);
   }
   const received = payments.filter((p) => p.companyId === companyId).sort((a, b) => time(a.occurredAt) - time(b.occurredAt));
   for (const p of received) {
@@ -149,7 +160,7 @@ export function debtors(transactions, payments, companyId) {
     c.totalRepaid += num(p.amount);
   }
   const customers = [...byPhone.values()]
-    .map((c) => ({ ...c, balance: Math.round((c.totalOwed - c.totalRepaid) * 100) / 100 }))
+    .map(({ saleKeys, ...c }) => ({ ...c, creditSales: saleKeys.size, balance: Math.round((c.totalOwed - c.totalRepaid) * 100) / 100 }))
     .sort((a, b) => b.balance - a.balance || a.customerName.localeCompare(b.customerName));
   const owing = customers.filter((c) => c.balance > 0);
   return {
@@ -170,6 +181,7 @@ export function customerLedger(items, transactions, payments, companyId, custome
     .sort((a, b) => time(b.occurredAt) - time(a.occurredAt))
     .map((tx) => ({
       transactionId: txId(tx),
+      saleId: tx.saleId || null,
       itemName: byLocalId.get(tx.itemLocalId)?.name ?? null,
       quantity: num(tx.quantity),
       total: saleTotal(tx),
@@ -189,7 +201,30 @@ export function customerLedger(items, transactions, payments, companyId, custome
       occurredAt: p.occurredAt,
       pending: p.syncStatus !== 'synced',
     }));
-  return { sales, payments: repayments };
+  return { sales: groupSaleLines(sales), payments: repayments };
+}
+
+// The lines of one multi-item sale (same saleId) are shown as one sale: totals added up and
+// `lines` listing each item. Single-item sales pass through with lines = [themselves].
+function groupSaleLines(rows) {
+  const out = [];
+  const bySale = new Map();
+  for (const row of rows) {
+    const group = row.saleId ? bySale.get(row.saleId) : null;
+    if (!group) {
+      const entry = { ...row, lines: [row] };
+      out.push(entry);
+      if (row.saleId) bySale.set(row.saleId, entry);
+      continue;
+    }
+    group.lines.push(row);
+    group.quantity += row.quantity;
+    group.total = Math.round((group.total + row.total) * 100) / 100;
+    group.amountPaid = Math.round((group.amountPaid + row.amountPaid) * 100) / 100;
+    group.owed = Math.round((group.owed + row.owed) * 100) / 100;
+    group.pending = group.pending || row.pending;
+  }
+  return out;
 }
 
 // RPT-03: every active item, with all-time sales costed at the item's current last purchase price.
@@ -233,13 +268,7 @@ export function transactionMargins(items, transactions, companyId, { itemId, fro
     .slice(0, max);
 
   const rows = sales.map((tx) => {
-    const t = time(tx.occurredAt);
-    const history = points.get(tx.itemLocalId) || [];
-    let price = null;
-    for (const p of history) {
-      if (p.t <= t) price = p;
-      else break;
-    }
+    const price = purchasePriceAt(points.get(tx.itemLocalId), time(tx.occurredAt));
     const item = byLocalId.get(tx.itemLocalId);
     const quantity = num(tx.quantity);
     const revenue = quantity * num(tx.unitPrice);
@@ -263,6 +292,50 @@ export function transactionMargins(items, transactions, companyId, { itemId, fro
     };
   });
   return { transactions: rows, limit: max, count: rows.length };
+}
+
+// The plain-language "How your business did" summary at the top of Reports (device only; built
+// from the same rules as the reports below it). For the date range:
+// - sales, stockBought and how the sales were paid (same numbers as salesVsPurchases);
+// - profit: every sale costed at the purchase price in effect on its date (as transactionMargins,
+//   but for all sales, not just the latest 50). Sales of items with no purchase price recorded
+//   before the sale can't be costed; they're counted in salesWithoutCost instead;
+// - the best-selling item by sales money, and how many items are at or below their alert level.
+export function businessSummary(items, transactions, companyId, range = {}, payments = []) {
+  const svp = salesVsPurchases(transactions, companyId, range, payments);
+  const points = purchasePoints(transactions, companyId);
+  const byLocalId = itemIndex(items);
+  let profit = 0;
+  let salesWithoutCost = 0;
+  const salesByItem = new Map();
+  for (const tx of transactions) {
+    if (tx.type !== 'out' || tx.companyId !== companyId || !inRange(tx, range)) continue;
+    const revenue = saleTotal(tx);
+    const price = purchasePriceAt(points.get(tx.itemLocalId), time(tx.occurredAt));
+    if (price) profit += revenue - num(tx.quantity) * price.amount;
+    else salesWithoutCost += 1;
+    salesByItem.set(tx.itemLocalId, (salesByItem.get(tx.itemLocalId) || 0) + revenue);
+  }
+  let bestSeller = null;
+  for (const [itemLocalId, revenue] of salesByItem) {
+    if (!bestSeller || revenue > bestSeller.revenue) {
+      bestSeller = { itemId: itemLocalId, name: byLocalId.get(itemLocalId)?.name ?? 'Unknown item', revenue };
+    }
+  }
+  const lowStockCount = items.filter((i) => i.companyId === companyId && isActive(i) && num(i.quantityOnHand) <= num(i.lowStockThreshold)).length;
+  return {
+    sales: svp.totalSalesRevenue,
+    saleCount: svp.saleCount,
+    stockBought: svp.totalPurchaseCost,
+    profit,
+    salesWithoutCost,
+    cash: svp.salesByPaymentMethod.cash.revenue,
+    transfer: svp.salesByPaymentMethod.transfer.revenue,
+    owedFromTheseSales: svp.salesByPaymentMethod.credit.revenue,
+    repaid: svp.repayments.total,
+    bestSeller,
+    lowStockCount,
+  };
 }
 
 // RPT-04: expected (system) vs counted stock for every adjustment.

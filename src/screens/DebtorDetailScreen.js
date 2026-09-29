@@ -143,9 +143,12 @@ export default function DebtorDetailScreen({ route }) {
                 {i > 0 && <Divider />}
                 <View style={styles.row}>
                   <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={styles.rowTitle} numberOfLines={1}>
-                      {s.itemName || 'Item'} × {formatNumber(s.quantity)}
+                    <Text style={styles.rowTitle} numberOfLines={2}>
+                      {s.lines.length > 1
+                        ? s.lines.map((l) => `${l.itemName || 'Item'} × ${formatNumber(l.quantity)}`).join(', ')
+                        : `${s.itemName || 'Item'} × ${formatNumber(s.quantity)}`}
                     </Text>
+                    {s.lines.length > 1 && <Text style={type.caption}>{s.lines.length} items in one sale</Text>}
                     <Text style={type.caption}>
                       {formatDate(s.occurredAt)} · {formatMoney(s.total)} · paid {formatMoney(s.amountPaid)}
                       {s.amountPaid > 0 ? ` (${METHOD_LABEL[s.paymentMethod]})` : ''}

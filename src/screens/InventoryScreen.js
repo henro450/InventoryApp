@@ -24,6 +24,7 @@ const CATALOG_COLUMNS = [
   { key: 'category', label: 'Category' },
   { key: 'unit', label: 'Unit' },
   { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
+  { key: 'allowDecimal', label: 'Allow Decimal' },
 ];
 
 // SYNC-06: visible "All synced" / "X pending" indicator so the user always knows whether
@@ -132,6 +133,7 @@ export default function InventoryScreen({ navigation, route }) {
         companyId: user.companyId,
         quantityOnHand: 0,
         lowStockThreshold: Number(row['Low Stock Threshold'] || row.lowStockThreshold || 0) || 0,
+        allowDecimal: /^(yes|y|true|1)$/i.test(String(row['Allow Decimal'] ?? row.allowDecimal ?? '').trim()),
         lastPurchasePrice: null,
         updatedAt: new Date().toISOString(),
         syncStatus: 'pending',
@@ -174,7 +176,7 @@ export default function InventoryScreen({ navigation, route }) {
         <>
           {canManageItems && <IconButton icon="upload" label="Import catalog from CSV" onPress={handleImportCatalog} />}
           <IconButton icon="download" label="Export catalog as CSV" onPress={handleExportCatalog} />
-          {(!isMainCompany || !isCompanyAdmin) && <AccountButton user={user} onLogout={logout} />}
+          <AccountButton user={user} onLogout={logout} />
         </>
       }
     />
