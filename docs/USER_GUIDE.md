@@ -109,8 +109,8 @@ ever lost by going offline; queued changes sync automatically the moment you're 
 your next sync.
 
 **Needs a connection:** logging in for the first time, adding/renaming/deactivating Sub
-Companies and sending invites, saving the price-anomaly threshold, generating a report
-snapshot, and the SuperAdmin screens. The Audit log and scheduled report snapshots come from
+Companies and sending invites, saving the price-anomaly threshold, making a daily
+summary now, and the SuperAdmin screens. The Audit log and daily summaries come from
 the server; offline you see the last copy loaded on the phone (the audit log also lists your
 unsynced changes at the top as **Waiting to sync**).
 
@@ -123,13 +123,17 @@ Rows missing a SKU or name are skipped and you'll be told how many were imported
 
 ## Reports
 
-Reports covers stock on hand, sales vs. purchases, margin (by item, by category, and — for a
-Main Company — by Sub Company), a price trend for any one item you select, a discrepancy
-report (comparing what the system expected vs. what you actually counted, for every manual
-adjustment you've made), and a history of automatically-generated daily summaries. Every
-section can be filtered by category, item, and/or date range, and exported to CSV
-individually. Reports are calculated on the phone, so they work offline and include changes
-that haven't synced yet.
+Reports starts with **How your business did**: for the chosen period, how much you sold, your
+profit on those sales (an estimate: what you sold for minus what you paid for those items), what
+you spent on new stock, how the sales were paid (cash, transfer, not paid yet), your best seller,
+and how many items are running low. Below it are **Customers who owe you** and **Stock you have now**.
+
+Tap **More details** for the full reports: money in and out (sales compared with stock bought,
+which isn't the same as profit), how customers paid, profit per item and per category, recent
+sales and profit, stock count differences (what the app expected vs. what you counted), how an
+item's prices changed, and the daily summaries. Use **Filters** to choose dates, a category or an
+item; most sections can be exported to CSV. Reports are calculated on the phone, so they work
+offline and include changes that haven't synced yet.
 
 **Part payments and people owing:** on a stock out (sale), **Amount paid** is optional. Leave it
 blank if the customer paid in full. Enter less for a part payment, or 0 if they're taking the goods
@@ -181,8 +185,8 @@ Company's audit log.
   an email with a link to set their own password; until they do, it shows **Invite pending**
   with a **Resend invite** button), rename, deactivate, or reactivate an existing one. This is
   only available if the SuperAdmin set your company up to have Sub Companies.
-- **Compare Companies**: a side-by-side table of item count, low-stock count, sales, purchase
-  cost, and margin across every company you can see, including your own.
+- **Compare Companies**: a side-by-side table of item count, items running low, sales, stock
+  bought, and sales minus stock bought across every company you can see, including your own.
 
 ## Logging out
 

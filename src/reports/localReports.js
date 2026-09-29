@@ -37,6 +37,7 @@ export function getCompanyReports(user, companyId, filters = {}) {
   return {
     stockOnHand: math.stockOnHand(items, companyId, { category: filters.category, itemId: filters.itemId }),
     salesVsPurchases: math.salesVsPurchases(transactions, companyId, range, payments),
+    summary: math.businessSummary(allItems, transactions, companyId, range, payments),
     debtors: math.debtors(transactions, payments, companyId),
     marginByItem: math.marginByItem(items, transactions, companyId).report,
     items,

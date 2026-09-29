@@ -64,6 +64,16 @@ function purchasePoints(transactions, companyId) {
   return byItem;
 }
 
+// The purchase price in effect at time t (the latest stock-in at or before it), or null.
+function purchasePriceAt(history, t) {
+  let price = null;
+  for (const p of history || []) {
+    if (p.t <= t) price = p;
+    else break;
+  }
+  return price;
+}
+
 // RPT-01
 export function stockOnHand(items, companyId, { category, itemId } = {}) {
   return items
@@ -258,13 +268,7 @@ export function transactionMargins(items, transactions, companyId, { itemId, fro
     .slice(0, max);
 
   const rows = sales.map((tx) => {
-    const t = time(tx.occurredAt);
-    const history = points.get(tx.itemLocalId) || [];
-    let price = null;
-    for (const p of history) {
-      if (p.t <= t) price = p;
-      else break;
-    }
+    const price = purchasePriceAt(points.get(tx.itemLocalId), time(tx.occurredAt));
     const item = byLocalId.get(tx.itemLocalId);
     const quantity = num(tx.quantity);
     const revenue = quantity * num(tx.unitPrice);
@@ -288,6 +292,50 @@ export function transactionMargins(items, transactions, companyId, { itemId, fro
     };
   });
   return { transactions: rows, limit: max, count: rows.length };
+}
+
+// The plain-language "How your business did" summary at the top of Reports (device only; built
+// from the same rules as the reports below it). For the date range:
+// - sales, stockBought and how the sales were paid (same numbers as salesVsPurchases);
+// - profit: every sale costed at the purchase price in effect on its date (as transactionMargins,
+//   but for all sales, not just the latest 50). Sales of items with no purchase price recorded
+//   before the sale can't be costed; they're counted in salesWithoutCost instead;
+// - the best-selling item by sales money, and how many items are at or below their alert level.
+export function businessSummary(items, transactions, companyId, range = {}, payments = []) {
+  const svp = salesVsPurchases(transactions, companyId, range, payments);
+  const points = purchasePoints(transactions, companyId);
+  const byLocalId = itemIndex(items);
+  let profit = 0;
+  let salesWithoutCost = 0;
+  const salesByItem = new Map();
+  for (const tx of transactions) {
+    if (tx.type !== 'out' || tx.companyId !== companyId || !inRange(tx, range)) continue;
+    const revenue = saleTotal(tx);
+    const price = purchasePriceAt(points.get(tx.itemLocalId), time(tx.occurredAt));
+    if (price) profit += revenue - num(tx.quantity) * price.amount;
+    else salesWithoutCost += 1;
+    salesByItem.set(tx.itemLocalId, (salesByItem.get(tx.itemLocalId) || 0) + revenue);
+  }
+  let bestSeller = null;
+  for (const [itemLocalId, revenue] of salesByItem) {
+    if (!bestSeller || revenue > bestSeller.revenue) {
+      bestSeller = { itemId: itemLocalId, name: byLocalId.get(itemLocalId)?.name ?? 'Unknown item', revenue };
+    }
+  }
+  const lowStockCount = items.filter((i) => i.companyId === companyId && isActive(i) && num(i.quantityOnHand) <= num(i.lowStockThreshold)).length;
+  return {
+    sales: svp.totalSalesRevenue,
+    saleCount: svp.saleCount,
+    stockBought: svp.totalPurchaseCost,
+    profit,
+    salesWithoutCost,
+    cash: svp.salesByPaymentMethod.cash.revenue,
+    transfer: svp.salesByPaymentMethod.transfer.revenue,
+    owedFromTheseSales: svp.salesByPaymentMethod.credit.revenue,
+    repaid: svp.repayments.total,
+    bestSeller,
+    lowStockCount,
+  };
 }
 
 // RPT-04: expected (system) vs counted stock for every adjustment.

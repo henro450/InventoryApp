@@ -105,7 +105,7 @@ export default function DashboardScreen({ navigation }) {
         {totals && (
           <View style={styles.hero}>
             <View style={styles.heroTop}>
-              <Text style={styles.heroLabel}>Total margin · all companies</Text>
+              <Text style={styles.heroLabel}>Sales minus stock bought · all companies</Text>
               {marginShare != null && <Text style={styles.heroShare}>{marginShare.toFixed(1)}% of sales</Text>}
             </View>
             <Text style={[styles.heroValue, totals.margin < 0 && { color: '#FFB4AB' }]} adjustsFontSizeToFit numberOfLines={1}>
@@ -114,11 +114,11 @@ export default function DashboardScreen({ navigation }) {
             <View style={styles.heroDivider} />
             <View style={styles.heroStats}>
               <View style={{ flex: 1, gap: 4 }}>
-                <Text style={styles.heroStatLabel}>Sales revenue</Text>
+                <Text style={styles.heroStatLabel}>Money from sales</Text>
                 <Text style={styles.heroStatValue}>{formatMoney(totals.totalSalesRevenue)}</Text>
               </View>
               <View style={{ flex: 1, gap: 4 }}>
-                <Text style={styles.heroStatLabel}>Purchase cost</Text>
+                <Text style={styles.heroStatLabel}>Spent on stock</Text>
                 <Text style={styles.heroStatValue}>{formatMoney(totals.totalPurchaseCost)}</Text>
               </View>
             </View>
@@ -216,7 +216,7 @@ export default function DashboardScreen({ navigation }) {
                         {stats && (
                           <View style={{ alignItems: 'flex-end', gap: 2 }}>
                             <Text style={[styles.subMargin, stats.margin < 0 && { color: colors.danger }]}>{formatMoney(stats.margin)}</Text>
-                            <Text style={type.caption}>margin</Text>
+                            <Text style={type.caption}>sales − stock</Text>
                           </View>
                         )}
                         <Icon name="chev" size={18} color={colors.chevron} />

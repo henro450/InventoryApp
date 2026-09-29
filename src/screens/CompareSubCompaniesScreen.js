@@ -11,10 +11,10 @@ import { Text, Screen, NavHeader, IconButton, Segmented, Card, BarRow, Loading }
 import { colors, fonts, type } from '../theme';
 
 const METRICS = [
-  { key: 'margin', label: 'Margin', total: 'Total margin', money: true },
+  { key: 'margin', label: 'Sales − stock', total: 'Sales minus stock bought', money: true },
   { key: 'totalSalesRevenue', label: 'Sales', total: 'Total sales', money: true },
-  { key: 'totalPurchaseCost', label: 'Purchases', total: 'Total purchases', money: true },
-  { key: 'lowStockCount', label: 'Low stock', total: 'Low-stock items', money: false },
+  { key: 'totalPurchaseCost', label: 'Stock bought', total: 'Spent on stock', money: true },
+  { key: 'lowStockCount', label: 'Running low', total: 'Items running low', money: false },
 ];
 
 const COLUMNS = [
@@ -24,8 +24,8 @@ const COLUMNS = [
   { key: 'cashSalesRevenue', label: 'Cash', money: true, width: 110 },
   { key: 'transferSalesRevenue', label: 'Transfer', money: true, width: 110 },
   { key: 'outstandingDebt', label: 'Owed', money: true, width: 110 },
-  { key: 'totalPurchaseCost', label: 'Purchases', money: true, width: 110 },
-  { key: 'margin', label: 'Margin', money: true, width: 110 },
+  { key: 'totalPurchaseCost', label: 'Stock bought', money: true, width: 110 },
+  { key: 'margin', label: 'Sales − stock', money: true, width: 120 },
 ];
 
 // RPT-07: side-by-side view of the Main Company and every linked Sub Company, by metric.
@@ -61,13 +61,13 @@ export default function CompareSubCompaniesScreen() {
       await exportCsv('company-comparison.csv', data.companies, [
         { key: 'companyName', label: 'Company' },
         { key: 'itemCount', label: 'Items' },
-        { key: 'lowStockCount', label: 'Low Stock' },
-        { key: 'totalSalesRevenue', label: 'Sales Revenue' },
-        { key: 'cashSalesRevenue', label: 'Cash Sales' },
-        { key: 'transferSalesRevenue', label: 'Transfer Sales' },
-        { key: 'outstandingDebt', label: 'Owed By Customers' },
-        { key: 'totalPurchaseCost', label: 'Purchase Cost' },
-        { key: 'margin', label: 'Margin' },
+        { key: 'lowStockCount', label: 'Running low' },
+        { key: 'totalSalesRevenue', label: 'Sales' },
+        { key: 'cashSalesRevenue', label: 'Paid in cash' },
+        { key: 'transferSalesRevenue', label: 'Paid by transfer' },
+        { key: 'outstandingDebt', label: 'Customers owe' },
+        { key: 'totalPurchaseCost', label: 'Spent on stock' },
+        { key: 'margin', label: 'Sales minus stock bought' },
       ]);
     } catch (err) {
       Alert.alert('Export failed', err.message);
