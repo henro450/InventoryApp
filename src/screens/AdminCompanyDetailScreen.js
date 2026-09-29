@@ -80,7 +80,7 @@ export default function AdminCompanyDetailScreen({ route }) {
               <Text style={styles.price}>{formatSubscription(data.company.subscription)}</Text>
               <Text style={type.caption}>
                 {totalUsers === 1 ? '1 user' : `${totalUsers} users`} across {data.subCompanies.length + 1}{' '}
-                {data.subCompanies.length === 0 ? 'company' : 'companies'}. Change the price with Edit, or subscribe/end it, on the Companies screen.
+                {data.subCompanies.length === 0 ? 'company' : 'companies'}. Change the price with Edit, or renew or expire it with Subscription, on the Companies screen.
               </Text>
             </Card>
 

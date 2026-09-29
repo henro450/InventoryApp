@@ -221,11 +221,10 @@ export default function ReportsScreen({ route, navigation }) {
       eyebrow={isMainCompany ? 'Main company' : 'Sub company'}
       title="Reports"
       right={
-        isMainCompany ? (
-          <IconButton icon="bell" label="Alerts" onPress={() => navigation.navigate('Alerts')} />
-        ) : (
+        <>
+          {isMainCompany && <IconButton icon="bell" label="Alerts" onPress={() => navigation.navigate('Alerts')} />}
           <AccountButton user={user} onLogout={logout} />
-        )
+        </>
       }
     />
   ) : (

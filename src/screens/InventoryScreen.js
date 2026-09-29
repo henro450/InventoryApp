@@ -176,7 +176,7 @@ export default function InventoryScreen({ navigation, route }) {
         <>
           {canManageItems && <IconButton icon="upload" label="Import catalog from CSV" onPress={handleImportCatalog} />}
           <IconButton icon="download" label="Export catalog as CSV" onPress={handleExportCatalog} />
-          {(!isMainCompany || !isCompanyAdmin) && <AccountButton user={user} onLogout={logout} />}
+          <AccountButton user={user} onLogout={logout} />
         </>
       }
     />

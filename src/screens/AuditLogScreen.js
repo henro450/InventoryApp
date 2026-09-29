@@ -9,7 +9,7 @@ import { formatDate, formatDateTime, formatMoney, formatTime, formatYmd, lastSyn
 import Icon from '../components/Icon';
 import {
   Text, Screen, LargeHeader, NavHeader, IconButton, Chip, Card, DateField, Button, Banner, EmptyState, Loading,
-  CompanySwitcher, ReadOnlyBanner, Pill,
+  CompanySwitcher, ReadOnlyBanner, Pill, AccountButton,
 } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
@@ -137,7 +137,7 @@ function dayKey(iso) {
 // than a second in-screen company switcher.
 // There is intentionally no edit or delete action anywhere on this screen (AUD-02).
 export default function AuditLogScreen({ route }) {
-  const { user, isMainCompany } = useAuth();
+  const { user, isMainCompany, logout } = useAuth();
   const companyId = route?.params?.companyId || user.companyId;
   const companyLabel = route?.params?.companyName;
   const isOwnCompany = companyId === user.companyId;
@@ -284,7 +284,12 @@ export default function AuditLogScreen({ route }) {
     <LargeHeader
       eyebrow={isMainCompany ? 'Main company' : 'Sub company'}
       title="Audit log"
-      right={<IconButton icon="sync" label="Refresh audit log" onPress={handleRefresh} />}
+      right={
+        <>
+          <IconButton icon="sync" label="Refresh audit log" onPress={handleRefresh} />
+          <AccountButton user={user} onLogout={logout} />
+        </>
+      }
     />
   ) : (
     <>

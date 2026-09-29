@@ -113,30 +113,58 @@ export function IconButton({ icon, label, onPress, variant = 'surface', size = 4
   );
 }
 
+// The avatar in each tab's header. Tapping it opens the Account sheet: who is signed in, the
+// admin shortcuts, and a full-width Log out button. (A sheet rather than an alert: Android alerts
+// show at most three buttons, which used to push "Log out" off the list for company admins.)
 export function AccountButton({ user, onLogout }) {
   const { fingerprintEnabled, turnOffFingerprint, isCompanyAdmin, isSuperAdmin } = useAuth();
   const navigation = useNavigation();
+  const [open, setOpen] = useState(false);
+  const go = (screen) => {
+    setOpen(false);
+    navigation.navigate(screen);
+  };
+  // Log out and turning off fingerprint may show an alert; iOS won't present one while the sheet
+  // is still sliding away, so run them once it has closed.
+  const afterClose = (action) => {
+    setOpen(false);
+    setTimeout(action, 350);
+  };
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Account: ${user?.name || 'you'}`}
-      onPress={() =>
-        Alert.alert(user?.name || 'Account', user?.email || '', [
-          { text: 'Cancel', style: 'cancel' },
-          ...(isCompanyAdmin && !isSuperAdmin
-            ? [
-                { text: 'Subscription', onPress: () => navigation.navigate('Subscription') },
-                { text: 'Manage users', onPress: () => navigation.navigate('CompanyUsers') },
-              ]
-            : []),
-          ...(fingerprintEnabled ? [{ text: 'Turn off fingerprint login', onPress: turnOffFingerprint }] : []),
-          { text: 'Log out', style: 'destructive', onPress: onLogout },
-        ])
-      }
-      style={({ pressed }) => [styles.avatar, pressed && { opacity: 0.7 }]}
-    >
-      <Text style={styles.avatarText}>{initials(user?.name)}</Text>
-    </Pressable>
+    <>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Account: ${user?.name || 'you'}. Log out and settings`}
+        onPress={() => setOpen(true)}
+        style={({ pressed }) => [styles.avatar, pressed && { opacity: 0.7 }]}
+      >
+        <Text style={styles.avatarText}>{initials(user?.name)}</Text>
+      </Pressable>
+      <Sheet visible={open} onClose={() => setOpen(false)} title={user?.name || 'Account'} description={user?.email || undefined}>
+        {isCompanyAdmin && !isSuperAdmin && (
+          <View style={{ gap: 10 }}>
+            <Button title="Subscription" variant="secondary" icon="wallet" height={48} onPress={() => go('Subscription')} />
+            <Button title="Manage users" variant="secondary" icon="user" height={48} onPress={() => go('CompanyUsers')} />
+          </View>
+        )}
+        {fingerprintEnabled && (
+          <Button
+            title="Turn off fingerprint login"
+            variant="secondary"
+            icon="lock"
+            height={48}
+            onPress={() => afterClose(turnOffFingerprint)}
+          />
+        )}
+        <Button
+          title="Log out"
+          variant="danger"
+          icon="x"
+          onPress={() => afterClose(onLogout)}
+        />
+        <Button title="Cancel" variant="ghost" height={44} onPress={() => setOpen(false)} />
+      </Sheet>
+    </>
   );
 }
 
