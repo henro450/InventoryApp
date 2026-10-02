@@ -4,7 +4,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../api/client';
 import { getCached, setCached } from '../db/localDb';
 import { formatDateTime, formatSubscription } from '../utils/format';
-import { Text, Screen, NavHeader, Card, SectionTitle, Divider, LetterTile, Pill, Banner, InlineEmpty, Loading, CountBadge } from '../components/ui';
+import { Text, Screen, NavHeader, Card, SectionTitle, Divider, LetterTile, Pill, Banner, InlineEmpty, Loading, CountBadge, KV } from '../components/ui';
+import { formatFee } from '../constants/registrationPricing';
+import { formatPhone } from '../utils/phone';
 import { colors, fonts, type } from '../theme';
 
 // SuperAdmin: a company's subscription price and everyone who uses it and each of its Sub
@@ -83,6 +85,27 @@ export default function AdminCompanyDetailScreen({ route }) {
                 {data.subCompanies.length === 0 ? 'company' : 'companies'}. Change the price with Edit, or subscribe/end it, on the Companies screen.
               </Text>
             </Card>
+
+            {data.company.registration ? (
+              <Card padding={18} gap={6}>
+                <SectionTitle
+                  title="Registration"
+                  right={<Pill kind={data.company.registration.source === 'self_signup' ? 'primary' : 'muted'} label={data.company.registration.source === 'self_signup' ? 'Signed up in app' : 'Added by you'} />}
+                />
+                <Text style={styles.price}>{formatFee(data.company.registration.fee)}</Text>
+                <KV label="Plan" value={data.company.registration.tierLabel} />
+                <KV label="Sub-companies declared" value={String(data.company.registration.subCompanyCount)} />
+                {data.company.registration.contactName ? <KV label="Contact" value={data.company.registration.contactName} /> : null}
+                {data.company.registration.phone ? <KV label="Phone" value={formatPhone(data.company.registration.phone)} /> : null}
+                {data.company.registration.address ? (
+                  <View style={{ gap: 2 }}>
+                    <Text style={type.caption}>Address</Text>
+                    <Text style={type.body}>{data.company.registration.address}</Text>
+                  </View>
+                ) : null}
+                <KV label="Registered" value={formatDateTime(data.company.registration.createdAt)} />
+              </Card>
+            ) : null}
 
             <UserGroup title={data.company.name} subtitle="Main company" users={data.company.users} inactive={!data.company.isActive} />
 

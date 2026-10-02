@@ -685,7 +685,7 @@ const styles = StyleSheet.create({
   tileText: { fontFamily: fonts.display, fontSize: 17, color: colors.ink },
   kv: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 },
   kvLabel: { fontSize: 14, color: colors.ink2 },
-  kvValue: { fontFamily: fonts.semibold, fontSize: 14, fontVariant: ['tabular-nums'] },
+  kvValue: { flexShrink: 1, textAlign: 'right', fontFamily: fonts.semibold, fontSize: 14, fontVariant: ['tabular-nums'] },
   statValue: { fontFamily: fonts.semibold, fontSize: 16, color: colors.ink, fontVariant: ['tabular-nums'] },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   stepperBig: {

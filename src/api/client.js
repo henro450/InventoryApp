@@ -74,6 +74,9 @@ export const api = {
   getPasswordToken: (token) => request(`/auth/password-token?token=${encodeURIComponent(token)}`, { auth: false }),
   setPassword: (payload) => request('/auth/set-password', { method: 'POST', body: payload, auth: false }),
   forgotPassword: (email) => request('/auth/forgot-password', { method: 'POST', body: { email }, auth: false }),
+  // Self sign-up for a new company, and the registration price list it shows.
+  registrationPricing: () => request('/auth/registration-pricing', { auth: false }),
+  signup: (payload) => request('/auth/signup', { method: 'POST', body: payload, auth: false }),
 
   // Fingerprint login (see src/auth/biometrics.js).
   registerBiometric: (deviceName) => request('/auth/biometric/register', { method: 'POST', body: { deviceName } }),

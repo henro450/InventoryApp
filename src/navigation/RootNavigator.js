@@ -9,6 +9,7 @@ import { useAuth } from '../context/AuthContext';
 import LoginScreen from '../screens/LoginScreen';
 import SetPasswordScreen from '../screens/SetPasswordScreen';
 import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
+import SignupScreen from '../screens/SignupScreen';
 import AdminCompaniesScreen from '../screens/AdminCompaniesScreen';
 import AdminCompanyDetailScreen from '../screens/AdminCompanyDetailScreen';
 import AdminSettingsScreen from '../screens/AdminSettingsScreen';
@@ -39,10 +40,11 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 // Invite and password-reset emails open beams://set-password?token=… (via the API's /invite
-// page), which lands on the SetPassword screen with the token as a route param.
+// page), which lands on the SetPassword screen with the token as a route param. beams://signup
+// opens company sign-up, so the link can be shared with new companies.
 const linking = {
   prefixes: [Linking.createURL('/'), 'beams://'],
-  config: { screens: { SetPassword: 'set-password' } },
+  config: { screens: { SetPassword: 'set-password', Signup: 'signup' } },
 };
 
 const navigationRef = createNavigationContainerRef();
@@ -129,6 +131,7 @@ export default function RootNavigator() {
           <>
             <Stack.Screen name="Login" component={LoginScreen} />
             <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+            <Stack.Screen name="Signup" component={SignupScreen} />
           </>
         ) : isSuperAdmin ? (
           <>
