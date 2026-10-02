@@ -55,7 +55,7 @@ export default function DashboardScreen({ navigation }) {
   const ownRow = summary?.companies?.find((c) => c.isMain);
   const statsById = new Map((summary?.companies || []).map((c) => [String(c.companyId), c]));
   const lastSynced = getLastSyncedAt(user.id);
-  const marginShare = totals && totals.totalSalesRevenue > 0 ? (totals.margin / totals.totalSalesRevenue) * 100 : null;
+  const heroMax = totals ? Math.max(totals.totalSalesRevenue, totals.totalPurchaseCost) : 0;
 
   return (
     <Screen>
@@ -104,24 +104,27 @@ export default function DashboardScreen({ navigation }) {
 
         {totals && (
           <View style={styles.hero}>
-            <View style={styles.heroTop}>
-              <Text style={styles.heroLabel}>Total margin · all companies</Text>
-              {marginShare != null && <Text style={styles.heroShare}>{marginShare.toFixed(1)}% of sales</Text>}
+            <Text style={styles.heroLabel}>Money in and out · all companies</Text>
+            <View style={styles.heroRows}>
+              {[
+                { label: 'Money from sales', value: totals.totalSalesRevenue, color: colors.okOnDark },
+                { label: 'Spent on stock', value: totals.totalPurchaseCost, color: colors.onDarkMuted },
+              ].map((row) => (
+                <View key={row.label} style={{ gap: 6 }}>
+                  <View style={styles.heroRowTop}>
+                    <Text style={styles.heroStatLabel}>{row.label}</Text>
+                    <Text style={styles.heroValue} adjustsFontSizeToFit numberOfLines={1}>
+                      {formatMoney(row.value)}
+                    </Text>
+                  </View>
+                  <View style={styles.heroBarTrack}>
+                    <View style={[styles.heroBar, { backgroundColor: row.color, width: `${barWidth(row.value, heroMax)}%` }]} />
+                  </View>
+                </View>
+              ))}
             </View>
-            <Text style={[styles.heroValue, totals.margin < 0 && { color: '#FFB4AB' }]} adjustsFontSizeToFit numberOfLines={1}>
-              {formatMoney(totals.margin)}
-            </Text>
             <View style={styles.heroDivider} />
-            <View style={styles.heroStats}>
-              <View style={{ flex: 1, gap: 4 }}>
-                <Text style={styles.heroStatLabel}>Sales revenue</Text>
-                <Text style={styles.heroStatValue}>{formatMoney(totals.totalSalesRevenue)}</Text>
-              </View>
-              <View style={{ flex: 1, gap: 4 }}>
-                <Text style={styles.heroStatLabel}>Purchase cost</Text>
-                <Text style={styles.heroStatValue}>{formatMoney(totals.totalPurchaseCost)}</Text>
-              </View>
-            </View>
+            <Text style={styles.heroDiff}>{differenceSentence(totals.margin, totals.totalSalesRevenue)}</Text>
             <Text style={styles.heroSync}>{lastSyncedLabel(lastSynced)}</Text>
           </View>
         )}
@@ -215,8 +218,8 @@ export default function DashboardScreen({ navigation }) {
                         </View>
                         {stats && (
                           <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                            <Text style={[styles.subMargin, stats.margin < 0 && { color: colors.danger }]}>{formatMoney(stats.margin)}</Text>
-                            <Text style={type.caption}>margin</Text>
+                            <Text style={styles.subMargin}>{formatMoney(Math.abs(stats.margin))}</Text>
+                            <Text style={type.caption}>{stats.margin < 0 ? 'more on stock' : stats.margin > 0 ? 'more from sales' : 'sales = stock'}</Text>
                           </View>
                         )}
                         <Icon name="chev" size={18} color={colors.chevron} />
@@ -241,15 +244,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line,
   },
   debtTitle: { fontFamily: fonts.semibold, fontSize: 15 },
-  hero: { backgroundColor: colors.ink, borderRadius: 22, padding: 20, gap: 14 },
-  heroTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  hero: { backgroundColor: colors.ink, borderRadius: 22, padding: 20, gap: 16 },
   heroLabel: { fontFamily: fonts.medium, fontSize: 13, color: colors.onDarkMuted },
-  heroShare: { fontFamily: fonts.semibold, fontSize: 12, color: colors.okOnDark },
-  heroValue: { fontFamily: fonts.display, fontSize: 42, lineHeight: 46, letterSpacing: -1.2, color: '#FFFFFF' },
+  heroRows: { gap: 14 },
+  heroRowTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 },
+  heroStatLabel: { fontSize: 13, color: colors.onDarkMuted },
+  heroValue: { flexShrink: 1, fontFamily: fonts.display, fontSize: 24, letterSpacing: -0.5, color: '#FFFFFF', fontVariant: ['tabular-nums'] },
+  heroBarTrack: { height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.10)', overflow: 'hidden' },
+  heroBar: { height: 6, borderRadius: 3 },
   heroDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.12)' },
-  heroStats: { flexDirection: 'row', gap: 12 },
-  heroStatLabel: { fontSize: 12, color: colors.onDarkMuted },
-  heroStatValue: { fontFamily: fonts.semibold, fontSize: 17, color: '#FFFFFF', fontVariant: ['tabular-nums'] },
+  heroDiff: { fontFamily: fonts.medium, fontSize: 14, lineHeight: 20, color: '#FFFFFF' },
   heroSync: { fontSize: 11, color: '#8D93A5' },
   tiles: { flexDirection: 'row', gap: 12 },
   tile: { flex: 1, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 18, paddingVertical: 14, paddingHorizontal: 16, gap: 6 },
@@ -266,3 +270,20 @@ const styles = StyleSheet.create({
   lowText: { color: colors.danger, fontFamily: fonts.medium },
   subMargin: { fontFamily: fonts.semibold, fontSize: 15, fontVariant: ['tabular-nums'] },
 });
+
+function barWidth(value, max) {
+  if (!max || value <= 0) return 0;
+  return Math.max(2, Math.round((value / max) * 100));
+}
+
+// Plain-words difference between money from sales and money spent on stock, so the card never
+// leads with a minus sign. Rounded to whole naira since it's a summary, not a ledger line.
+function differenceSentence(margin, salesRevenue) {
+  const amount = formatMoney(Math.round(Math.abs(margin))).replace(/\.00$/, '');
+  if (Math.abs(margin) < 0.005) return 'Sales and stock spending are even so far';
+  if (margin > 0) {
+    const share = salesRevenue > 0 ? ` · ${Math.round((margin / salesRevenue) * 100)}% of sales` : '';
+    return `${amount} more from sales than spent on stock${share}`;
+  }
+  return `${amount} more spent on stock than sold`;
+}

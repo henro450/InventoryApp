@@ -18,8 +18,11 @@ import {
 import { colors, fonts, type } from '../theme';
 
 const PREVIEW_ROWS = 5;
-const PAYMENT_LABEL = { cash: 'Cash', transfer: 'Transfer', credit: 'Not yet paid (credit)' };
+const PAYMENT_LABEL = { cash: 'Cash', transfer: 'Transfer', credit: 'Not paid yet (owed)' };
 
+// Written for people who don't read accounts: a plain-language "How your business did" summary
+// first, then who owes money and the stock you have; the detailed reports sit under "More
+// details". Headings, captions and CSV columns use everyday words (profit, not margin).
 // RPT-01, RPT-02, RPT-03, RPT-04, PRC-04: stock on hand (item/category filter), sales vs
 // purchases (date range filter), margin by item/category/Sub Company, per-transaction margin
 // (historical cost basis), discrepancy report (expected vs counted stock), and price trend for
@@ -41,6 +44,8 @@ export default function ReportsScreen({ route, navigation }) {
   const [snapshotsSavedAt, setSnapshotsSavedAt] = useState(null); // set when showing a saved (offline) copy
   const [stockOnHand, setStockOnHand] = useState([]);
   const [salesVsPurchases, setSalesVsPurchases] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [showDetails, setShowDetails] = useState(false);
   const [debtors, setDebtors] = useState(null);
   const [marginByItem, setMarginByItem] = useState([]);
   const [transactionMargins, setTransactionMargins] = useState([]);
@@ -67,6 +72,7 @@ export default function ReportsScreen({ route, navigation }) {
     const reports = getCompanyReports(user, companyId, { ...filters, ...range });
     setStockOnHand(reports.stockOnHand);
     setSalesVsPurchases(reports.salesVsPurchases);
+    setSummary(reports.summary);
     setDebtors(reports.debtors);
     setMarginByItem(reports.marginByItem);
     setItems(reports.items);
@@ -221,11 +227,10 @@ export default function ReportsScreen({ route, navigation }) {
       eyebrow={isMainCompany ? 'Main company' : 'Sub company'}
       title="Reports"
       right={
-        isMainCompany ? (
-          <IconButton icon="bell" label="Alerts" onPress={() => navigation.navigate('Alerts')} />
-        ) : (
+        <>
+          {isMainCompany && <IconButton icon="bell" label="Alerts" onPress={() => navigation.navigate('Alerts')} />}
           <AccountButton user={user} onLogout={logout} />
-        )
+        </>
       }
     />
   ) : (
@@ -323,97 +328,16 @@ export default function ReportsScreen({ route, navigation }) {
           </Card>
         )}
 
-        <Card padding={18} gap={14}>
-          <SectionTitle title="Sales vs. purchases" />
-          {svp ? (
-            <>
-              <View style={{ flexDirection: 'row', gap: 12 }}>
-                <View style={{ flex: 1, gap: 4 }}>
-                  <Text style={type.caption}>Sales revenue</Text>
-                  <Text style={styles.bigNum} adjustsFontSizeToFit numberOfLines={1}>
-                    {formatMoney(svp.totalSalesRevenue)}
-                  </Text>
-                </View>
-                <View style={{ flex: 1, gap: 4 }}>
-                  <Text style={type.caption}>Purchase cost</Text>
-                  <Text style={styles.bigNum} adjustsFontSizeToFit numberOfLines={1}>
-                    {formatMoney(svp.totalPurchaseCost)}
-                  </Text>
-                </View>
-              </View>
-              <View style={{ gap: 6 }} accessible accessibilityLabel="Sales compared with purchases">
-                <View style={[styles.svpBar, { width: `${(svp.totalSalesRevenue / svpMax) * 100}%`, backgroundColor: colors.primary }]} />
-                <View style={[styles.svpBar, { width: `${(svp.totalPurchaseCost / svpMax) * 100}%`, backgroundColor: colors.chevron }]} />
-              </View>
-              <KV
-                strong
-                label="Margin"
-                value={`${formatMoney(svp.margin)}${svp.totalSalesRevenue > 0 ? ` · ${((svp.margin / svp.totalSalesRevenue) * 100).toFixed(1)}%` : ''}`}
-                valueColor={svp.margin >= 0 ? colors.ok : colors.danger}
-              />
-              <KV label="Sales recorded" value={formatNumber(svp.saleCount)} />
-              <KV label="Purchases recorded" value={formatNumber(svp.purchaseCount)} />
-            </>
-          ) : (
-            <InlineEmpty>No data available.</InlineEmpty>
-          )}
-        </Card>
-
-        <Card padding={18} gap={14}>
-          <SectionTitle
-            title="Sales by payment method"
-            right={exportButton('sales by payment method', () =>
-              handleExport('sales-by-payment-method.csv', paymentRows, [
-                { key: 'method', label: 'Payment Method' },
-                { key: 'count', label: 'Sales' },
-                { key: 'revenue', label: 'Revenue' },
-                { key: 'share', label: 'Share of Revenue (%)' },
-              ])
-            )}
-          />
-          {!svp || svp.saleCount === 0 ? (
-            <InlineEmpty>No sales recorded{dateLabel ? ' in this period' : ' yet'}.</InlineEmpty>
-          ) : (
-            <>
-              {paymentRows.map((row) => (
-                <View key={row.key} style={{ gap: 6 }}>
-                  <View style={styles.payRow}>
-                    <Text style={styles.payName}>{row.method}</Text>
-                    <Text style={styles.payValue}>{formatMoney(row.revenue)}</Text>
-                  </View>
-                  <View style={styles.payTrack}>
-                    <View
-                      style={[
-                        styles.payFill,
-                        { width: `${row.share}%`, backgroundColor: row.key === 'cash' ? colors.ok : row.key === 'transfer' ? colors.primary : colors.danger },
-                      ]}
-                    />
-                  </View>
-                  <Text style={type.caption}>
-                    {plural(row.count, 'sale')} · {row.share.toFixed(1)}% of sales revenue
-                  </Text>
-                </View>
-              ))}
-              {svp.repayments.total > 0 && (
-                <>
-                  <Divider />
-                  <KV label="Debt repayments received" value={formatMoney(svp.repayments.total)} valueColor={colors.ok} />
-                  <Text style={type.caption}>
-                    Cash {formatMoney(svp.repayments.cash.amount)} · Transfer {formatMoney(svp.repayments.transfer.amount)}
-                  </Text>
-                </>
-              )}
-              <Text style={type.caption}>
-                Cash and Transfer are what was paid at the time of sale; the rest is owed by customers. Sales recorded before payment
-                methods were added count as cash.
-              </Text>
-            </>
-          )}
-        </Card>
+        <BusinessSummary
+          summary={summary}
+          periodLabel={dateLabel || 'All time'}
+          owedTotal={debtors?.totals.outstanding}
+          onOpenDebtors={() => navigation.navigate('Debtors', isOwnCompany ? {} : { companyId, companyName: companyLabel })}
+        />
 
         <Card padding={18} gap={12}>
           <SectionTitle
-            title="Money owed by customers"
+            title="Customers who owe you"
             right={
               <Pressable
                 accessibilityRole="button"
@@ -425,12 +349,12 @@ export default function ReportsScreen({ route, navigation }) {
             }
           />
           {!debtors || debtors.customers.length === 0 ? (
-            <InlineEmpty>No part-paid or credit sales yet.</InlineEmpty>
+            <InlineEmpty>Nobody owes you money. Sales that weren’t fully paid show up here.</InlineEmpty>
           ) : (
             <>
               <View style={{ flexDirection: 'row', gap: 12 }}>
                 <View style={{ flex: 1, gap: 4 }}>
-                  <Text style={type.caption}>Outstanding</Text>
+                  <Text style={type.caption}>Total owed to you</Text>
                   <Text style={[styles.bigNum, debtors.totals.outstanding > 0 && { color: colors.danger }]} adjustsFontSizeToFit numberOfLines={1}>
                     {formatMoney(debtors.totals.outstanding)}
                   </Text>
@@ -446,55 +370,33 @@ export default function ReportsScreen({ route, navigation }) {
                 .map((c) => (
                   <KV key={c.customerPhone} label={c.customerName} value={formatMoney(c.balance)} valueColor={colors.danger} />
                 ))}
-              <KV label="Repaid so far (all time)" value={formatMoney(debtors.totals.totalRepaid)} />
-              <Text style={type.caption}>Balances are all-time; they aren't affected by the date filter.</Text>
+              <KV label="Paid back so far (all time)" value={formatMoney(debtors.totals.totalRepaid)} />
+              <Text style={type.caption}>This is everything owed to date. It doesn’t change with the date filter.</Text>
             </>
           )}
         </Card>
 
-        {isMainCompany && isOwnCompany && (
-          <Card padding={18} gap={14}>
-            <SectionTitle title="Margin by sub company" />
-            {!marginByCompany ? (
-              <InlineEmpty>Could not load company breakdown.</InlineEmpty>
-            ) : (
-              [...marginByCompany]
-                .sort((a, b) => b.margin - a.margin)
-                .map((row) => (
-                  <BarRow
-                    key={row.companyId}
-                    name={row.companyName}
-                    you={row.isMain}
-                    value={row.margin}
-                    max={companyMax}
-                    label={formatMoney(row.margin)}
-                    danger={row.margin < 0}
-                  />
-                ))
-            )}
-          </Card>
-        )}
-
         <Card padding={18} gap={12}>
           <SectionTitle
-            title="Stock on hand"
+            title="Stock you have now"
             right={exportButton('stock on hand', () =>
               handleExport('stock-on-hand.csv', stockOnHand, [
                 { key: 'sku', label: 'SKU' },
-                { key: 'name', label: 'Name' },
+                { key: 'name', label: 'Item' },
                 { key: 'category', label: 'Category' },
-                { key: 'quantityOnHand', label: 'Quantity On Hand' },
+                { key: 'quantityOnHand', label: 'In stock' },
                 { key: 'unit', label: 'Unit' },
-                { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
+                { key: 'lowStockThreshold', label: 'Warn me at' },
               ])
             )}
           />
+          <Text style={[type.caption, { marginTop: -6 }]}>Items shown in red are running low.</Text>
           {stockOnHand.length === 0 ? (
             <InlineEmpty>No items yet.</InlineEmpty>
           ) : (
             <Table
               cols={[2, 1.1, 0.9]}
-              head={['Item', 'On hand', 'Alert at']}
+              head={['Item', 'In stock', 'Warn me at']}
               rows={limited('stock', stockOnHand).map((item) => {
                 const low = item.quantityOnHand <= item.lowStockThreshold;
                 return {
@@ -507,226 +409,448 @@ export default function ReportsScreen({ route, navigation }) {
           {showAll('stock', stockOnHand, 'items')}
         </Card>
 
-        <Card padding={18} gap={12}>
-          <SectionTitle
-            title="Margin by item"
-            right={exportButton('margin by item', () =>
-              handleExport('margin-by-item.csv', marginByItem, [
-                { key: 'name', label: 'Item' },
-                { key: 'category', label: 'Category' },
-                { key: 'totalUnitsSold', label: 'Units Sold' },
-                { key: 'totalRevenue', label: 'Revenue' },
-                { key: 'estimatedCost', label: 'Estimated Cost' },
-                { key: 'estimatedMargin', label: 'Estimated Margin' },
-              ])
-            )}
-          />
-          {marginByItem.length === 0 ? (
-            <InlineEmpty>No sales recorded yet.</InlineEmpty>
-          ) : (
-            <Table
-              cols={[1.7, 0.7, 1.2, 1.2]}
-              head={['Item', 'Sold', 'Revenue', 'Est. margin']}
-              rows={limited('marginItem', marginByItem).map((row) => ({
-                key: row.itemId,
-                cells: [
-                  row.name,
-                  formatNumber(row.totalUnitsSold),
-                  formatMoney(row.totalRevenue),
-                  { text: formatMoney(row.estimatedMargin), color: row.estimatedMargin >= 0 ? colors.ok : colors.danger },
-                ],
-              }))}
-            />
-          )}
-          {showAll('marginItem', marginByItem, 'items')}
-        </Card>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: showDetails }}
+          onPress={() => setShowDetails((v) => !v)}
+          style={({ pressed }) => [styles.detailsToggle, pressed && { opacity: 0.7 }]}
+        >
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={type.bodyStrong}>{showDetails ? 'Hide details' : 'More details'}</Text>
+            <Text style={type.caption}>Money in and out, how customers paid, profit per item, stock counts, prices and daily summaries.</Text>
+          </View>
+          <Icon name={showDetails ? 'chevup' : 'chevdown'} size={22} color={colors.ink2} />
+        </Pressable>
 
-        <Card padding={18} gap={12}>
-          <SectionTitle
-            title="Margin by category"
-            right={exportButton('margin by category', () =>
-              handleExport('margin-by-category.csv', marginByCategory, [
-                { key: 'category', label: 'Category' },
-                { key: 'totalRevenue', label: 'Revenue' },
-                { key: 'estimatedCost', label: 'Estimated Cost' },
-                { key: 'estimatedMargin', label: 'Estimated Margin' },
-              ])
-            )}
-          />
-          {marginByCategory.length === 0 ? (
-            <InlineEmpty>No sales recorded yet.</InlineEmpty>
-          ) : (
-            <View style={styles.tiles}>
-              {marginByCategory.map((row) => (
-                <View key={row.category} style={styles.catTile}>
-                  <Text style={type.caption} numberOfLines={1}>
-                    {row.category}
-                  </Text>
-                  <Text style={[styles.catValue, row.estimatedMargin < 0 && { color: colors.danger }]}>{formatMoney(row.estimatedMargin)}</Text>
-                  <Text style={type.caption}>of {formatMoney(row.totalRevenue)} revenue</Text>
-                </View>
-              ))}
-            </View>
-          )}
-        </Card>
-
-        <Card padding={18} gap={12}>
-          <SectionTitle
-            title="Per-transaction margin"
-            right={exportButton('transaction margins', () =>
-              handleExport('transaction-margins.csv', transactionMargins, [
-                { key: 'itemName', label: 'Item' },
-                { key: 'sku', label: 'SKU' },
-                { key: 'occurredAt', label: 'Date' },
-                { key: 'quantity', label: 'Quantity' },
-                { key: 'unitPrice', label: 'Sale Price' },
-                { key: 'paymentMethod', label: 'Payment Method' },
-                { key: 'amountPaid', label: 'Amount Paid' },
-                { key: 'customerName', label: 'Customer (if owed)' },
-                { key: 'estimatedCost', label: 'Estimated Cost' },
-                { key: 'estimatedMargin', label: 'Estimated Margin' },
-              ])
-            )}
-          />
-          <Text style={[type.caption, { marginTop: -6 }]}>Up to the 50 most recent matching sales.</Text>
-          {transactionMargins.length === 0 ? (
-            <InlineEmpty>No sales recorded yet.</InlineEmpty>
-          ) : (
-            <Table
-              cols={[2, 1, 1]}
-              head={['Recent sale', 'Price', 'Margin']}
-              rows={limited('tx', transactionMargins).map((tx) => ({
-                key: tx.transactionId,
-                cells: [
-                  {
-                    text: `${tx.itemName || 'Unknown item'} × ${formatNumber(tx.quantity)}`,
-                    sub:
-                      tx.amountPaid < tx.revenue - 0.005
-                        ? `${formatDate(tx.occurredAt)} · ${tx.amountPaid > 0 ? 'Part-paid' : 'On credit'}${tx.customerName ? ` · ${tx.customerName}` : ''}`
-                        : `${formatDate(tx.occurredAt)} · ${PAYMENT_LABEL[tx.paymentMethod]}`,
-                  },
-                  formatMoney(tx.unitPrice),
-                  tx.costAvailable
-                    ? { text: formatMoney(tx.estimatedMargin), color: tx.estimatedMargin >= 0 ? colors.ok : colors.danger }
-                    : { text: 'No cost data', color: colors.ink3 },
-                ],
-              }))}
-            />
-          )}
-          {showAll('tx', transactionMargins, 'sales')}
-        </Card>
-
-        <Card padding={18} gap={12}>
-          <SectionTitle
-            title="Discrepancy report"
-            right={exportButton('discrepancies', () =>
-              handleExport('discrepancies.csv', discrepancies, [
-                { key: 'itemName', label: 'Item' },
-                { key: 'sku', label: 'SKU' },
-                { key: 'occurredAt', label: 'Date' },
-                { key: 'expected', label: 'Expected (System)' },
-                { key: 'counted', label: 'Counted (Physical)' },
-                { key: 'discrepancy', label: 'Discrepancy' },
-              ])
-            )}
-          />
-          <Text style={[type.caption, { marginTop: -6 }]}>Expected (system) vs. counted (physical) stock for every manual adjustment.</Text>
-          {discrepancies.length === 0 ? (
-            <InlineEmpty>No stock adjustments recorded yet.</InlineEmpty>
-          ) : (
-            <Table
-              cols={[1.8, 0.9, 0.9, 0.7]}
-              head={['Item', 'Expected', 'Counted', 'Diff']}
-              rows={limited('disc', discrepancies).map((d) => ({
-                key: d.transactionId,
-                cells: [
-                  { text: d.itemName || 'Unknown item', sub: formatDate(d.occurredAt) },
-                  d.discrepancyKnown ? formatNumber(d.expected) : 'Unknown',
-                  formatNumber(d.counted),
-                  !d.discrepancyKnown
-                    ? { text: '—', color: colors.ink3 }
-                    : {
-                        text: `${d.discrepancy > 0 ? '+' : d.discrepancy < 0 ? '−' : ''}${Math.abs(d.discrepancy)}`,
-                        color: d.discrepancy === 0 ? undefined : d.discrepancy > 0 ? colors.ok : colors.danger,
-                      },
-                ],
-              }))}
-            />
-          )}
-          {showAll('disc', discrepancies, 'adjustments')}
-        </Card>
-
-        <Card padding={18} gap={12}>
-          <SectionTitle
-            title="Price trend"
-            right={exportButton('price trend', () =>
-              handleExport(`price-trend-${selectedItem ? selectedItem.sku : 'item'}.csv`, priceTrend, [
-                { key: 'effectiveDate', label: 'Date' },
-                { key: 'priceType', label: 'Type' },
-                { key: 'amount', label: 'Amount' },
-              ])
-            )}
-          />
-          {!appliedFilters.itemId ? (
-            <View style={{ gap: 10 }}>
-              <InlineEmpty>Choose an item in Filters to see how its prices have moved.</InlineEmpty>
-              <Button title="Choose an item" variant="secondary" icon="filter" height={44} onPress={() => setFiltersOpen(true)} style={{ alignSelf: 'flex-start' }} />
-            </View>
-          ) : priceTrend.length === 0 ? (
-            <InlineEmpty>No price history recorded yet for {appliedFilters.itemName}.</InlineEmpty>
-          ) : (
-            <>
-              <Text style={styles.trendItem}>{appliedFilters.itemName}</Text>
-              <PriceTrendChart history={priceTrend} />
-            </>
-          )}
-        </Card>
-
-        <Card padding={18} gap={12}>
-          <SectionTitle title="Scheduled reports" />
-          <Text style={[type.caption, { marginTop: -6 }]}>
-            A summary is generated automatically once a day and appears here. There is no email or push delivery.
-          </Text>
-          {snapshotsSavedAt && (
-            <Text style={type.caption}>
-              {snapshotsSavedAt === 'never'
-                ? 'Offline · snapshots load once you’re connected.'
-                : `Offline · saved copy from ${formatDateTime(snapshotsSavedAt)}.`}
+        {showDetails && (
+          <>
+          <Card padding={18} gap={14}>
+            <SectionTitle title="Money in and out" />
+            <Text style={[type.caption, { marginTop: -8 }]}>
+              Money from sales compared with money spent buying stock. This isn’t profit: stock you bought but haven’t sold yet still counts as spent.
             </Text>
-          )}
-          {snapshots.length === 0 ? (
-            <InlineEmpty>No automatic reports generated yet.</InlineEmpty>
-          ) : (
-            <View>
-              {limited('snap', snapshots).map((s, i) => (
-                <View key={s.id}>
-                  {i > 0 && <Divider />}
-                  <View style={styles.snapRow}>
-                    <Icon name="calendar" size={20} color={colors.ink3} />
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={styles.snapTitle}>{formatDateTime(s.generatedAt)}</Text>
-                      <Text style={type.caption}>
-                        {formatNumber(s.itemCount)} items · {formatNumber(s.lowStockCount)} low · {formatMoney(s.totalSalesRevenue)} sales
-                      </Text>
-                      {Number(s.totalSalesRevenue) > 0 && (
-                        <Text style={type.caption}>
-                          Cash {formatMoney(s.cashSalesRevenue)} · Transfer {formatMoney(s.transferSalesRevenue)}
-                        </Text>
-                      )}
-                      {Number(s.outstandingDebt) > 0 && <Text style={type.caption}>Owed by customers {formatMoney(s.outstandingDebt)}</Text>}
-                    </View>
-                    <Text style={[styles.snapMargin, { color: s.margin >= 0 ? colors.ok : colors.danger }]}>{formatMoney(s.margin)}</Text>
+            {svp ? (
+              <>
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <View style={{ flex: 1, gap: 4 }}>
+                    <Text style={type.caption}>Money from sales</Text>
+                    <Text style={styles.bigNum} adjustsFontSizeToFit numberOfLines={1}>
+                      {formatMoney(svp.totalSalesRevenue)}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1, gap: 4 }}>
+                    <Text style={type.caption}>Spent on stock</Text>
+                    <Text style={styles.bigNum} adjustsFontSizeToFit numberOfLines={1}>
+                      {formatMoney(svp.totalPurchaseCost)}
+                    </Text>
                   </View>
                 </View>
-              ))}
-            </View>
+                <View style={{ gap: 6 }} accessible accessibilityLabel="Sales compared with purchases">
+                  <View style={[styles.svpBar, { width: `${(svp.totalSalesRevenue / svpMax) * 100}%`, backgroundColor: colors.primary }]} />
+                  <View style={[styles.svpBar, { width: `${(svp.totalPurchaseCost / svpMax) * 100}%`, backgroundColor: colors.chevron }]} />
+                </View>
+                <KV
+                  strong
+                  label="Sales minus stock bought"
+                  value={`${formatMoney(svp.margin)}${svp.totalSalesRevenue > 0 ? ` · ${((svp.margin / svp.totalSalesRevenue) * 100).toFixed(1)}%` : ''}`}
+                  valueColor={svp.margin >= 0 ? colors.ok : colors.danger}
+                />
+                <KV label="Number of sales" value={formatNumber(svp.saleCount)} />
+                <KV label="Times you bought stock" value={formatNumber(svp.purchaseCount)} />
+              </>
+            ) : (
+              <InlineEmpty>No data available.</InlineEmpty>
+            )}
+          </Card>
+
+          <Card padding={18} gap={14}>
+            <SectionTitle
+              title="How customers paid"
+              right={exportButton('sales by payment method', () =>
+                handleExport('sales-by-payment-method.csv', paymentRows, [
+                  { key: 'method', label: 'How they paid' },
+                  { key: 'count', label: 'Number of sales' },
+                  { key: 'revenue', label: 'Amount' },
+                  { key: 'share', label: 'Share of sales (%)' },
+                ])
+              )}
+            />
+            {!svp || svp.saleCount === 0 ? (
+              <InlineEmpty>No sales recorded{dateLabel ? ' in this period' : ' yet'}.</InlineEmpty>
+            ) : (
+              <>
+                {paymentRows.map((row) => (
+                  <View key={row.key} style={{ gap: 6 }}>
+                    <View style={styles.payRow}>
+                      <Text style={styles.payName}>{row.method}</Text>
+                      <Text style={styles.payValue}>{formatMoney(row.revenue)}</Text>
+                    </View>
+                    <View style={styles.payTrack}>
+                      <View
+                        style={[
+                          styles.payFill,
+                          { width: `${row.share}%`, backgroundColor: row.key === 'cash' ? colors.ok : row.key === 'transfer' ? colors.primary : colors.danger },
+                        ]}
+                      />
+                    </View>
+                    <Text style={type.caption}>
+                      {plural(row.count, 'sale')} · {row.share.toFixed(1)}% of all sales
+                    </Text>
+                  </View>
+                ))}
+                {svp.repayments.total > 0 && (
+                  <>
+                    <Divider />
+                    <KV label="Paid back by customers" value={formatMoney(svp.repayments.total)} valueColor={colors.ok} />
+                    <Text style={type.caption}>
+                      Cash {formatMoney(svp.repayments.cash.amount)} · Transfer {formatMoney(svp.repayments.transfer.amount)}
+                    </Text>
+                  </>
+                )}
+                <Text style={type.caption}>
+                  Cash and Transfer are what customers paid when they bought. "Not paid yet" is what they still owed from those sales.
+                  Older sales from before payment types were added count as cash.
+                </Text>
+              </>
+            )}
+          </Card>
+
+          {isMainCompany && isOwnCompany && (
+            <Card padding={18} gap={14}>
+              <SectionTitle title="Sales minus stock bought, per company" />
+              {!marginByCompany ? (
+                <InlineEmpty>Couldn’t load the per-company figures.</InlineEmpty>
+              ) : (
+                [...marginByCompany]
+                  .sort((a, b) => b.margin - a.margin)
+                  .map((row) => (
+                    <BarRow
+                      key={row.companyId}
+                      name={row.companyName}
+                      you={row.isMain}
+                      value={row.margin}
+                      max={companyMax}
+                      label={formatMoney(row.margin)}
+                      danger={row.margin < 0}
+                    />
+                  ))
+              )}
+            </Card>
           )}
-          {showAll('snap', snapshots, 'snapshots')}
-          <Button title="Generate snapshot now" variant="secondary" icon="sync" height={48} onPress={handleGenerateSnapshot} loading={generatingSnapshot} />
-        </Card>
+
+          <Card padding={18} gap={12}>
+            <SectionTitle
+              title="Profit per item (estimate)"
+              right={exportButton('margin by item', () =>
+                handleExport('margin-by-item.csv', marginByItem, [
+                  { key: 'name', label: 'Item' },
+                  { key: 'category', label: 'Category' },
+                  { key: 'totalUnitsSold', label: 'Quantity sold' },
+                  { key: 'totalRevenue', label: 'Sales' },
+                  { key: 'estimatedCost', label: 'Cost (estimate)' },
+                  { key: 'estimatedMargin', label: 'Profit (estimate)' },
+                ])
+              )}
+            />
+            <Text style={[type.caption, { marginTop: -6 }]}>All sales so far, costed at what you last paid for each item.</Text>
+            {marginByItem.length === 0 ? (
+              <InlineEmpty>No sales recorded yet.</InlineEmpty>
+            ) : (
+              <Table
+                cols={[1.7, 0.7, 1.2, 1.2]}
+                head={['Item', 'Sold', 'Sales', 'Profit']}
+                rows={limited('marginItem', marginByItem).map((row) => ({
+                  key: row.itemId,
+                  cells: [
+                    row.name,
+                    formatNumber(row.totalUnitsSold),
+                    formatMoney(row.totalRevenue),
+                    { text: formatMoney(row.estimatedMargin), color: row.estimatedMargin >= 0 ? colors.ok : colors.danger },
+                  ],
+                }))}
+              />
+            )}
+            {showAll('marginItem', marginByItem, 'items')}
+          </Card>
+
+          <Card padding={18} gap={12}>
+            <SectionTitle
+              title="Profit per category (estimate)"
+              right={exportButton('margin by category', () =>
+                handleExport('margin-by-category.csv', marginByCategory, [
+                  { key: 'category', label: 'Category' },
+                  { key: 'totalRevenue', label: 'Sales' },
+                  { key: 'estimatedCost', label: 'Cost (estimate)' },
+                  { key: 'estimatedMargin', label: 'Profit (estimate)' },
+                ])
+              )}
+            />
+            {marginByCategory.length === 0 ? (
+              <InlineEmpty>No sales recorded yet.</InlineEmpty>
+            ) : (
+              <View style={styles.tiles}>
+                {marginByCategory.map((row) => (
+                  <View key={row.category} style={styles.catTile}>
+                    <Text style={type.caption} numberOfLines={1}>
+                      {row.category}
+                    </Text>
+                    <Text style={[styles.catValue, row.estimatedMargin < 0 && { color: colors.danger }]}>{formatMoney(row.estimatedMargin)}</Text>
+                    <Text style={type.caption}>profit from {formatMoney(row.totalRevenue)} of sales</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </Card>
+
+          <Card padding={18} gap={12}>
+            <SectionTitle
+              title="Recent sales and profit"
+              right={exportButton('transaction margins', () =>
+                handleExport('transaction-margins.csv', transactionMargins, [
+                  { key: 'itemName', label: 'Item' },
+                  { key: 'sku', label: 'SKU' },
+                  { key: 'occurredAt', label: 'Date' },
+                  { key: 'quantity', label: 'Quantity' },
+                  { key: 'unitPrice', label: 'Price each' },
+                  { key: 'paymentMethod', label: 'How they paid' },
+                  { key: 'amountPaid', label: 'Amount paid' },
+                  { key: 'customerName', label: 'Customer (if they owe)' },
+                  { key: 'estimatedCost', label: 'Cost (estimate)' },
+                  { key: 'estimatedMargin', label: 'Profit (estimate)' },
+                ])
+              )}
+            />
+            <Text style={[type.caption, { marginTop: -6 }]}>Your latest 50 sales, each costed at what you paid for the item at that time.</Text>
+            {transactionMargins.length === 0 ? (
+              <InlineEmpty>No sales recorded yet.</InlineEmpty>
+            ) : (
+              <Table
+                cols={[2, 1, 1]}
+                head={['Sale', 'Price', 'Profit']}
+                rows={limited('tx', transactionMargins).map((tx) => ({
+                  key: tx.transactionId,
+                  cells: [
+                    {
+                      text: `${tx.itemName || 'Unknown item'} × ${formatNumber(tx.quantity)}`,
+                      sub:
+                        tx.amountPaid < tx.revenue - 0.005
+                          ? `${formatDate(tx.occurredAt)} · ${tx.amountPaid > 0 ? 'Part paid' : 'Not paid yet'}${tx.customerName ? ` · ${tx.customerName}` : ''}`
+                          : `${formatDate(tx.occurredAt)} · ${PAYMENT_LABEL[tx.paymentMethod]}`,
+                    },
+                    formatMoney(tx.unitPrice),
+                    tx.costAvailable
+                      ? { text: formatMoney(tx.estimatedMargin), color: tx.estimatedMargin >= 0 ? colors.ok : colors.danger }
+                      : { text: 'No cost price', color: colors.ink3 },
+                  ],
+                }))}
+              />
+            )}
+            {showAll('tx', transactionMargins, 'sales')}
+          </Card>
+
+          <Card padding={18} gap={12}>
+            <SectionTitle
+              title="Stock count differences"
+              right={exportButton('discrepancies', () =>
+                handleExport('discrepancies.csv', discrepancies, [
+                  { key: 'itemName', label: 'Item' },
+                  { key: 'sku', label: 'SKU' },
+                  { key: 'occurredAt', label: 'Date' },
+                  { key: 'expected', label: 'App said' },
+                  { key: 'counted', label: 'You counted' },
+                  { key: 'discrepancy', label: 'Difference' },
+                ])
+              )}
+            />
+            <Text style={[type.caption, { marginTop: -6 }]}>Each time you counted stock: what the app expected and what you actually found. A minus means items were missing.</Text>
+            {discrepancies.length === 0 ? (
+              <InlineEmpty>You haven’t recorded a stock count yet.</InlineEmpty>
+            ) : (
+              <Table
+                cols={[1.8, 0.9, 0.9, 0.7]}
+                head={['Item', 'App said', 'Counted', 'Diff.']}
+                rows={limited('disc', discrepancies).map((d) => ({
+                  key: d.transactionId,
+                  cells: [
+                    { text: d.itemName || 'Unknown item', sub: formatDate(d.occurredAt) },
+                    d.discrepancyKnown ? formatNumber(d.expected) : 'Unknown',
+                    formatNumber(d.counted),
+                    !d.discrepancyKnown
+                      ? { text: '—', color: colors.ink3 }
+                      : {
+                          text: `${d.discrepancy > 0 ? '+' : d.discrepancy < 0 ? '−' : ''}${Math.abs(d.discrepancy)}`,
+                          color: d.discrepancy === 0 ? undefined : d.discrepancy > 0 ? colors.ok : colors.danger,
+                        },
+                  ],
+                }))}
+              />
+            )}
+            {showAll('disc', discrepancies, 'adjustments')}
+          </Card>
+
+          <Card padding={18} gap={12}>
+            <SectionTitle
+              title="How prices changed"
+              right={exportButton('price trend', () =>
+                handleExport(`price-trend-${selectedItem ? selectedItem.sku : 'item'}.csv`, priceTrend, [
+                  { key: 'effectiveDate', label: 'Date' },
+                  { key: 'priceType', label: 'Bought or sold' },
+                  { key: 'amount', label: 'Price' },
+                ])
+              )}
+            />
+            {!appliedFilters.itemId ? (
+              <View style={{ gap: 10 }}>
+                <InlineEmpty>Choose an item in Filters to see what you paid and charged for it over time.</InlineEmpty>
+                <Button title="Choose an item" variant="secondary" icon="filter" height={44} onPress={() => setFiltersOpen(true)} style={{ alignSelf: 'flex-start' }} />
+              </View>
+            ) : priceTrend.length === 0 ? (
+              <InlineEmpty>No price history recorded yet for {appliedFilters.itemName}.</InlineEmpty>
+            ) : (
+              <>
+                <Text style={styles.trendItem}>{appliedFilters.itemName}</Text>
+                <PriceTrendChart history={priceTrend} />
+              </>
+            )}
+          </Card>
+
+          <Card padding={18} gap={12}>
+            <SectionTitle title="Daily summaries" />
+            <Text style={[type.caption, { marginTop: -6 }]}>
+              A short summary is saved automatically once a day and listed here.
+            </Text>
+            {snapshotsSavedAt && (
+              <Text style={type.caption}>
+                {snapshotsSavedAt === 'never'
+                  ? 'Offline · summaries load once you’re connected.'
+                  : `Offline · saved copy from ${formatDateTime(snapshotsSavedAt)}.`}
+              </Text>
+            )}
+            {snapshots.length === 0 ? (
+              <InlineEmpty>No daily summaries yet.</InlineEmpty>
+            ) : (
+              <View>
+                {limited('snap', snapshots).map((s, i) => (
+                  <View key={s.id}>
+                    {i > 0 && <Divider />}
+                    <View style={styles.snapRow}>
+                      <Icon name="calendar" size={20} color={colors.ink3} />
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text style={styles.snapTitle}>{formatDateTime(s.generatedAt)}</Text>
+                        <Text style={type.caption}>
+                          {formatNumber(s.itemCount)} items · {formatNumber(s.lowStockCount)} running low · {formatMoney(s.totalSalesRevenue)} sales
+                        </Text>
+                        {Number(s.totalSalesRevenue) > 0 && (
+                          <Text style={type.caption}>
+                            Cash {formatMoney(s.cashSalesRevenue)} · Transfer {formatMoney(s.transferSalesRevenue)}
+                          </Text>
+                        )}
+                        {Number(s.outstandingDebt) > 0 && <Text style={type.caption}>Customers owed {formatMoney(s.outstandingDebt)}</Text>}
+                      </View>
+                      <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                        <Text style={[styles.snapMargin, { color: s.margin >= 0 ? colors.ok : colors.danger }]}>{formatMoney(s.margin)}</Text>
+                        <Text style={type.caption}>sales − stock</Text>
+                      </View>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+            {showAll('snap', snapshots, 'summaries')}
+            <Button title="Make today’s summary now" variant="secondary" icon="sync" height={48} onPress={handleGenerateSnapshot} loading={generatingSnapshot} />
+          </Card>
+          </>
+        )}
       </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
+  );
+}
+
+// "How your business did": the period's key numbers in plain sentences, for someone who
+// doesn't read accounts. Profit is an estimate: each sale costed at what was paid for the item
+// at the time (reportMath.businessSummary). Sales of items with no purchase price recorded can't
+// be costed and are called out rather than silently counted as pure profit.
+function BusinessSummary({ summary, periodLabel, owedTotal, onOpenDebtors }) {
+  if (!summary) return null;
+  const hasSales = summary.saleCount > 0;
+  return (
+    <Card padding={18} gap={14}>
+      <View style={{ gap: 2 }}>
+        <Text style={type.heading} accessibilityRole="header">
+          How your business did
+        </Text>
+        <Text style={type.caption}>{periodLabel}</Text>
+      </View>
+
+      {!hasSales && summary.stockBought === 0 ? (
+        <InlineEmpty>No sales or stock bought in this period yet.</InlineEmpty>
+      ) : (
+        <>
+          <SummaryLine label="You sold goods worth" value={formatMoney(summary.sales)} note={hasSales ? plural(summary.saleCount, 'sale') : 'No sales yet'} big />
+          <SummaryLine
+            label="Your profit on those sales"
+            value={formatMoney(summary.profit)}
+            color={summary.profit >= 0 ? colors.ok : colors.danger}
+            note={
+              summary.salesWithoutCost > 0
+                ? `An estimate. ${plural(summary.salesWithoutCost, 'sale')} of items with no cost price recorded ${summary.salesWithoutCost === 1 ? 'isn’t' : 'aren’t'} counted.`
+                : 'An estimate: what you sold for, minus what you paid for those items.'
+            }
+            big
+          />
+          <SummaryLine label="You spent on new stock" value={formatMoney(summary.stockBought)} />
+          <Divider />
+          <View style={{ gap: 8 }}>
+            <Text style={type.label}>How these sales were paid</Text>
+            <SummaryLine label="Cash" value={formatMoney(summary.cash)} />
+            <SummaryLine label="Transfer" value={formatMoney(summary.transfer)} />
+            {summary.owedFromTheseSales > 0 && (
+              <SummaryLine label="Not paid yet" value={formatMoney(summary.owedFromTheseSales)} color={colors.danger} />
+            )}
+            {summary.repaid > 0 && <SummaryLine label="Old debts paid back" value={formatMoney(summary.repaid)} color={colors.ok} />}
+          </View>
+        </>
+      )}
+
+      <Divider />
+      <Pressable accessibilityRole="button" onPress={onOpenDebtors} style={({ pressed }) => [styles.summaryLink, pressed && { opacity: 0.7 }]}>
+        <Icon name="user" size={18} color={colors.ink2} />
+        <Text style={[type.body, { flex: 1 }]}>Customers still owe you</Text>
+        <Text style={[styles.summaryValue, owedTotal > 0 && { color: colors.danger }]}>{formatMoney(owedTotal || 0)}</Text>
+        <Icon name="chev" size={18} color={colors.chevron} />
+      </Pressable>
+      {summary.bestSeller && (
+        <View style={styles.summaryLink}>
+          <Icon name="chart" size={18} color={colors.ink2} />
+          <Text style={[type.body, { flex: 1 }]} numberOfLines={2}>
+            Best seller: <Text style={styles.summaryStrong}>{summary.bestSeller.name}</Text> ({formatMoney(summary.bestSeller.revenue)})
+          </Text>
+        </View>
+      )}
+      <View style={styles.summaryLink}>
+        <Icon name="alert" size={18} color={summary.lowStockCount > 0 ? colors.danger : colors.ink2} />
+        <Text style={[type.body, { flex: 1 }]}>
+          {summary.lowStockCount > 0
+            ? `${plural(summary.lowStockCount, 'item')} running low. See "Stock you have now" below.`
+            : 'No items are running low.'}
+        </Text>
+      </View>
+    </Card>
+  );
+}
+
+function SummaryLine({ label, value, note, color, big = false }) {
+  return (
+    <View style={{ gap: 2 }}>
+      <View style={styles.summaryRow}>
+        <Text style={[big ? type.bodyStrong : type.body, { flex: 1 }]}>{label}</Text>
+        <Text style={[big ? styles.summaryBig : styles.summaryValue, color && { color }]} adjustsFontSizeToFit numberOfLines={1}>
+          {value}
+        </Text>
+      </View>
+      {note ? <Text style={type.caption}>{note}</Text> : null}
+    </View>
   );
 }
 
@@ -795,4 +919,13 @@ const styles = StyleSheet.create({
   th: { fontFamily: fonts.semibold, fontSize: 12, color: colors.ink3 },
   td: { fontSize: 13, color: colors.ink, fontVariant: ['tabular-nums'] },
   num: { textAlign: 'right' },
+  summaryRow: { flexDirection: 'row', alignItems: 'baseline', gap: 12 },
+  summaryBig: { fontFamily: fonts.display, fontSize: 22, letterSpacing: -0.3, fontVariant: ['tabular-nums'], maxWidth: '55%' },
+  summaryValue: { fontFamily: fonts.semibold, fontSize: 15, fontVariant: ['tabular-nums'], maxWidth: '55%' },
+  summaryStrong: { fontFamily: fonts.semibold },
+  summaryLink: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 36 },
+  detailsToggle: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderRadius: 18, borderWidth: 1,
+    borderColor: colors.line, backgroundColor: colors.surface,
+  },
 });

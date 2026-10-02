@@ -3,7 +3,7 @@ import { View, FlatList, StyleSheet, Alert, RefreshControl } from 'react-native'
 import { useFocusEffect } from '@react-navigation/native';
 import { api } from '../api/client';
 import { getCached, setCached } from '../db/localDb';
-import { formatDateTime, formatSubscription } from '../utils/format';
+import { formatDate, formatDateTime, formatSubscription } from '../utils/format';
 import { useAuth } from '../context/AuthContext';
 import {
   Text, Screen, LargeHeader, IconButton, AccountButton, SearchField, Card, LetterTile, Pill, Button, Banner, EmptyState,
@@ -93,7 +93,10 @@ export default function AdminCompaniesScreen({ navigation }) {
   const [editContactName, setEditContactName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editPrice, setEditPrice] = useState('');
-  const [togglingId, setTogglingId] = useState(null);
+  // Subscription sheet: renew (add one period) or expire now.
+  const [subCompany, setSubCompany] = useState(null);
+  const [subAction, setSubAction] = useState(null); // 'renew' | 'expire' while a request runs
+  const [subscriptionDays, setSubscriptionDays] = useState(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   const [resendingId, setResendingId] = useState(null);
@@ -226,31 +229,38 @@ export default function AdminCompaniesScreen({ navigation }) {
     }
   }
 
-  // Manually mark a company subscribed (a new period from today) or end its subscription now.
-  function handleToggleSubscribed(company) {
-    const active = company.subscription?.status === 'active';
+  function openSubscription(company) {
+    setSubCompany(company);
+    if (subscriptionDays === null) {
+      api
+        .adminGetSettings()
+        .then(({ settings }) => setSubscriptionDays(settings.subscriptionDays))
+        .catch(() => {}); // the sheet falls back to "one subscription period"
+    }
+  }
+
+  async function runSubscriptionAction(action) {
+    const company = subCompany;
+    setSubAction(action);
+    try {
+      if (action === 'renew') await api.adminRenewSubscription(company.id);
+      else await api.adminExpireSubscription(company.id);
+      setSubCompany(null);
+      load();
+    } catch (err) {
+      Alert.alert("Couldn't update subscription", err.status ? err.message : 'This needs an internet connection.');
+    } finally {
+      setSubAction(null);
+    }
+  }
+
+  function confirmExpire() {
     Alert.alert(
-      active ? 'End subscription?' : 'Mark as subscribed?',
-      active
-        ? `${company.name}'s subscription will end now.`
-        : `${company.name} will be subscribed from today for one subscription period. Use this when payment was confirmed without an uploaded proof.`,
+      'Expire subscription now?',
+      `Stock in and sales stop straight away for ${subCompany.name} and its sub-companies, until the subscription is renewed.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        {
-          text: active ? 'End subscription' : 'Mark subscribed',
-          style: active ? 'destructive' : 'default',
-          onPress: async () => {
-            setTogglingId(company.id);
-            try {
-              await api.adminUpdateCompany(company.id, { subscribed: !active });
-              load();
-            } catch (err) {
-              Alert.alert("Couldn't update subscription", err.status ? err.message : 'This needs an internet connection.');
-            } finally {
-              setTogglingId(null);
-            }
-          },
-        },
+        { text: 'Expire now', style: 'destructive', onPress: () => runSubscriptionAction('expire') },
       ]
     );
   }
@@ -397,13 +407,12 @@ export default function AdminCompaniesScreen({ navigation }) {
             <View style={styles.actions}>
               <Button title="Edit" variant="secondary" icon="pencil" height={44} style={{ flex: 1 }} onPress={() => openEdit(item)} />
               <Button
-                title={item.subscription?.status === 'active' ? 'End sub.' : 'Subscribe'}
+                title="Subscription"
                 variant="secondary"
-                icon={item.subscription?.status === 'active' ? 'x' : 'check'}
+                icon="calendar"
                 height={44}
                 style={{ flex: 1 }}
-                loading={togglingId === item.id}
-                onPress={() => handleToggleSubscribed(item)}
+                onPress={() => openSubscription(item)}
               />
               <Button
                 title="Users"
@@ -493,7 +502,56 @@ export default function AdminCompaniesScreen({ navigation }) {
         />
         <SubscriptionFields price={editPrice} onPrice={setEditPrice} />
       </Sheet>
+
+      <SubscriptionSheet
+        company={subCompany}
+        days={subscriptionDays}
+        busy={subAction}
+        onRenew={() => runSubscriptionAction('renew')}
+        onExpire={confirmExpire}
+        onClose={() => setSubCompany(null)}
+      />
     </Screen>
+  );
+}
+
+// Renew adds one subscription period: a running paid period is extended from its end (no days are
+// lost), otherwise the period starts today. Expire ends the paid period and/or free trial now.
+function SubscriptionSheet({ company, days, busy, onRenew, onExpire, onClose }) {
+  const sub = company?.subscription;
+  const status = sub?.status;
+  const running = status === 'active' || status === 'trial';
+  const period = days ? `${days} day${days === 1 ? '' : 's'}` : 'one subscription period';
+  const paidEnd = sub?.currentPeriodEnd ? new Date(sub.currentPeriodEnd) : null;
+  const extending = status === 'active' && paidEnd && paidEnd > new Date();
+  const newEnd = days ? new Date((extending ? paidEnd : new Date()).getTime() + days * 86400000) : null;
+  const renewNote = extending
+    ? `Adds ${period} to the current period${newEnd ? `, so it ends ${formatDate(newEnd)}` : ''}.`
+    : `Starts a paid period today${newEnd ? ` that ends ${formatDate(newEnd)}` : ` for ${period}`}.`;
+  return (
+    <Sheet visible={!!company} onClose={onClose} title="Subscription" description={company?.name}>
+      <Card padding={14} gap={6}>
+        <Text style={type.small}>Current status</Text>
+        <Text style={[styles.strong, { fontSize: 15 }, status === 'expired' && { color: colors.danger }]}>{formatSubscription(sub)}</Text>
+      </Card>
+      <View style={{ gap: 8 }}>
+        <Button title={`Renew for ${period}`} icon="check" onPress={onRenew} loading={busy === 'renew'} disabled={!!busy} />
+        <Text style={type.caption}>{renewNote} Use this when payment was confirmed without an uploaded proof.</Text>
+      </View>
+      {sub?.free ? (
+        <Text style={type.caption}>This company is free (₦0), so it never expires. Set a price with Edit to be able to expire it.</Text>
+      ) : running ? (
+        <View style={{ gap: 8 }}>
+          <Button title="Expire now" variant="danger" icon="x" onPress={onExpire} loading={busy === 'expire'} disabled={!!busy} />
+          <Text style={type.caption}>
+            Ends the {status === 'trial' ? 'free trial' : 'subscription'} now. Stock in and sales stop for this company and its sub-companies until it's renewed.
+          </Text>
+        </View>
+      ) : (
+        <Text style={type.caption}>Nothing is running, so there's nothing to expire.</Text>
+      )}
+      <Button title="Close" variant="secondary" height={48} onPress={onClose} />
+    </Sheet>
   );
 }
 

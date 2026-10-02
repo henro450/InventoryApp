@@ -6,7 +6,7 @@ import { getLocalItems, saveLocalItem } from '../db/localDb';
 import { useAuth } from '../context/AuthContext';
 import { runSync } from '../sync/syncEngine';
 import Icon from '../components/Icon';
-import { Text, Screen, NavHeader, Field, Chip, Stepper, BottomBar, Button } from '../components/ui';
+import { Text, Screen, NavHeader, Field, Chip, Stepper, BottomBar, Button, Checkbox } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
 const UNIT_PRESETS = ['unit', 'box', 'kg', 'm', 'pair', 'litre'];
@@ -32,6 +32,8 @@ export default function AddItemScreen({ navigation, route }) {
   const [lowStockThreshold, setLowStockThreshold] = useState(
     editingItem?.lowStockThreshold != null ? String(editingItem.lowStockThreshold) : ''
   );
+  // Items sold by weight or length can take decimal quantities (e.g. 2.5 kg). Off by default.
+  const [allowDecimal, setAllowDecimal] = useState(!!editingItem?.allowDecimal);
   const [submitting, setSubmitting] = useState(false);
 
   // Suggest the categories this company already uses, most common first.
@@ -60,6 +62,7 @@ export default function AddItemScreen({ navigation, route }) {
           category: category || null,
           unit,
           lowStockThreshold: lowStockThreshold ? Number(lowStockThreshold) : 0,
+          allowDecimal,
           updatedAt: new Date().toISOString(),
           syncStatus: 'pending',
           userId: user.id,
@@ -77,6 +80,7 @@ export default function AddItemScreen({ navigation, route }) {
           companyId: user.companyId,
           quantityOnHand: 0,
           lowStockThreshold: lowStockThreshold ? Number(lowStockThreshold) : 0,
+          allowDecimal,
           lastPurchasePrice: null,
           updatedAt: new Date().toISOString(),
           syncStatus: 'pending',
@@ -166,6 +170,13 @@ export default function AddItemScreen({ navigation, route }) {
               <Field value={unit} onChangeText={setUnit} placeholder="e.g. roll, can, bag" accessibilityLabel="Custom unit" autoCapitalize="none" />
             )}
           </View>
+
+          <Checkbox
+            label="Allow decimal quantities"
+            hint="For items sold by weight or length, e.g. 2.5 kg. Stock in, sales and counts take decimals, and + / − change by 0.5."
+            checked={allowDecimal}
+            onChange={setAllowDecimal}
+          />
 
           <View style={{ gap: 8 }}>
             <Stepper label="Low-stock alert at" value={lowStockThreshold} onChange={setLowStockThreshold} />

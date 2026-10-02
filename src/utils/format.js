@@ -48,8 +48,26 @@ export function groupDigits(raw) {
   return rest.length ? `${grouped}.${rest.join('')}` : grouped;
 }
 
+// Whole numbers show as before ("1,250"); fractional quantities (items that allow decimals)
+// keep up to 2 decimal places ("2.5", "1,250.75").
 export function formatNumber(n) {
-  return String(Math.round(Number(n || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const value = Math.round(Number(n || 0) * 100) / 100;
+  const [whole, decimals] = String(Math.abs(value)).split('.');
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${value < 0 ? '-' : ''}${grouped}${decimals ? `.${decimals}` : ''}`;
+}
+
+// Typed quantity -> plain value. Items that allow decimals take a point and up to 2 decimal
+// places (what the server stores); other items take whole numbers only.
+export function cleanQuantityInput(text, allowDecimal) {
+  const raw = cleanNumberInput(text, { decimal: !!allowDecimal });
+  const dot = raw.indexOf('.');
+  return dot === -1 ? raw : raw.slice(0, dot + 3);
+}
+
+// The step for an item's quantity − / + buttons.
+export function quantityStep(item) {
+  return item?.allowDecimal ? 0.5 : 1;
 }
 
 export function formatPercent(n, digits = 1) {

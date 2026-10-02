@@ -60,6 +60,7 @@ function applyItemChange(operation, item, userId) {
     companyId: item.companyId,
     quantityOnHand: item.quantityOnHand,
     lowStockThreshold: item.lowStockThreshold,
+    allowDecimal: !!item.allowDecimal,
     lastPurchasePrice: item.lastPurchasePrice,
     version: item.version,
     updatedAt: item.updatedAt,
