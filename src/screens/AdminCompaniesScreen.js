@@ -7,15 +7,17 @@ import { formatDateTime, formatSubscription } from '../utils/format';
 import { useAuth } from '../context/AuthContext';
 import {
   Text, Screen, LargeHeader, IconButton, AccountButton, SearchField, Card, LetterTile, Pill, Button, Banner, EmptyState,
-  Loading, Field, Sheet, Segmented,
+  Loading, Field, Sheet, Segmented, Stepper,
 } from '../components/ui';
+import { tierFor, formatFee } from '../constants/registrationPricing';
+import { isValidPhone } from '../utils/phone';
 import { colors, fonts, type } from '../theme';
 
 const YES_NO = [
   { key: 'yes', label: 'Yes' },
   { key: 'no', label: 'No' },
 ];
-const EMPTY_FORM = { email: '', companyName: '', hasSubCompanies: 'no', price: '' };
+const EMPTY_FORM = { email: '', companyName: '', hasSubCompanies: 'no', subCount: '1', contactName: '', phone: '', price: '' };
 
 // Subscription price field value -> API value: blank means no price (null); otherwise a number.
 function parsePrice(input) {
@@ -24,6 +26,38 @@ function parsePrice(input) {
   const value = Number(text);
   if (!Number.isFinite(value) || value < 0) return { error: 'Enter a price of zero or more, or leave it blank.' };
   return { value };
+}
+
+// Sub-company answer -> the count the registration fee is priced on (at least 1 when "Yes").
+function declaredCount(hasSubs, subCount) {
+  return hasSubs === 'yes' ? Math.max(1, Math.floor(Number(subCount) || 0)) : 0;
+}
+
+// "Has sub-companies?" plus, when yes, how many — which sets the registration fee shown below it.
+function SubCompanyFields({ hasSubs, onHasSubs, subCount, onSubCount, note }) {
+  const tier = tierFor(declaredCount(hasSubs, subCount));
+  return (
+    <View style={{ gap: 12 }}>
+      <View style={{ gap: 8 }}>
+        <Text style={styles.label}>Has sub-companies?</Text>
+        <Segmented accessibilityLabel="Has sub-companies" options={YES_NO} value={hasSubs} onChange={onHasSubs} />
+        {note}
+      </View>
+      {hasSubs === 'yes' && <Stepper label="How many sub-companies?" value={subCount} onChange={onSubCount} />}
+      {tier && (
+        <Text style={type.small}>
+          Registration fee: <Text style={styles.strong}>{formatFee(tier.fee)}</Text> ({tier.label.toLowerCase()})
+        </Text>
+      )}
+    </View>
+  );
+}
+
+// One line about a company's registration for its card, e.g. "₦5,000 · 3 sub-companies declared · Signed up in the app".
+function registrationLine(reg) {
+  if (!reg) return null;
+  const declared = reg.subCompanyCount === 0 ? 'No sub-companies' : `${reg.subCompanyCount} sub-${reg.subCompanyCount === 1 ? 'company' : 'companies'} declared`;
+  return `${formatFee(reg.fee)} · ${declared}${reg.source === 'self_signup' ? ' · Signed up in the app' : ''}`;
 }
 
 function SubscriptionFields({ price, onPrice }) {
@@ -55,6 +89,9 @@ export default function AdminCompaniesScreen({ navigation }) {
   const [editing, setEditing] = useState(null);
   const [editName, setEditName] = useState('');
   const [editSubs, setEditSubs] = useState('no');
+  const [editSubCount, setEditSubCount] = useState('1');
+  const [editContactName, setEditContactName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
   const [editPrice, setEditPrice] = useState('');
   const [togglingId, setTogglingId] = useState(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
@@ -104,6 +141,10 @@ export default function AdminCompaniesScreen({ navigation }) {
       Alert.alert('Missing info', 'Email and company name are both required.');
       return;
     }
+    if (form.phone.trim() && !isValidPhone(form.phone)) {
+      Alert.alert('Check the phone number', 'Enter a valid phone number, or leave it blank.');
+      return;
+    }
     setSubmitting(true);
     try {
       const price = parsePrice(form.price);
@@ -116,6 +157,9 @@ export default function AdminCompaniesScreen({ navigation }) {
         email,
         companyName,
         allowSubCompanies: form.hasSubCompanies === 'yes',
+        subCompanyCount: declaredCount(form.hasSubCompanies, form.subCount),
+        contactName: form.contactName.trim() || undefined,
+        phone: form.phone.trim() || undefined,
         ...(price.value !== null ? { subscriptionPrice: price.value } : {}),
       });
       setForm(EMPTY_FORM);
@@ -139,7 +183,11 @@ export default function AdminCompaniesScreen({ navigation }) {
   function openEdit(company) {
     setEditing(company);
     setEditName(company.name);
-    setEditSubs(company.allowSubCompanies ? 'yes' : 'no');
+    const reg = company.registration;
+    setEditSubs((reg ? reg.subCompanyCount > 0 : company.allowSubCompanies) ? 'yes' : 'no');
+    setEditSubCount(String(Math.max(1, reg ? reg.subCompanyCount : company.subCompanyCount || 0)));
+    setEditContactName(reg?.contactName || '');
+    setEditPhone(reg?.phone || '');
     setEditPrice(company.subscription?.price !== null && company.subscription?.price !== undefined ? String(company.subscription.price) : '');
   }
 
@@ -153,12 +201,21 @@ export default function AdminCompaniesScreen({ navigation }) {
       Alert.alert('Check the price', price.error);
       return;
     }
+    if (editPhone.trim() && !isValidPhone(editPhone)) {
+      Alert.alert('Check the phone number', 'Enter a valid phone number, or leave it blank.');
+      return;
+    }
     setEditSubmitting(true);
     try {
       await api.adminUpdateCompany(editing.id, {
         companyName: editName.trim(),
         allowSubCompanies: editSubs === 'yes',
         subscriptionPrice: price.value,
+        // Saving the edit sheet prices the registration too, including for companies registered
+        // before sign-up existed. Blank contact fields clear them.
+        subCompanyCount: declaredCount(editSubs, editSubCount),
+        contactName: editContactName.trim() || null,
+        phone: editPhone.trim() || null,
       });
       setEditing(null);
       load();
@@ -214,7 +271,13 @@ export default function AdminCompaniesScreen({ navigation }) {
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return companies;
-    return companies.filter((c) => c.name.toLowerCase().includes(q) || (c.admin?.email || '').toLowerCase().includes(q));
+    return companies.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.admin?.email || '').toLowerCase().includes(q) ||
+        (c.registration?.contactName || '').toLowerCase().includes(q) ||
+        (c.registration?.phone || '').includes(q)
+    );
   }, [companies, query]);
 
   const pendingCount = companies.filter((c) => c.status === 'pending').length;
@@ -271,7 +334,7 @@ export default function AdminCompaniesScreen({ navigation }) {
                 onAction={handleRefresh}
               />
             )}
-            {companies.length > 3 && <SearchField value={query} onChangeText={setQuery} placeholder="Search by company or email" />}
+            {companies.length > 3 && <SearchField value={query} onChangeText={setQuery} placeholder="Search by company, email or contact" />}
           </View>
         }
         ListEmptyComponent={
@@ -312,6 +375,19 @@ export default function AdminCompaniesScreen({ navigation }) {
               </Text>
               {item.pendingPayments > 0 && <Pill kind="warn" label={`${item.pendingPayments} to review`} />}
             </View>
+            <Text style={type.small}>
+              Registration:{' '}
+              {item.registration ? (
+                <Text style={styles.strong}>{registrationLine(item.registration)}</Text>
+              ) : (
+                <Text style={{ color: colors.ink3 }}>Not set. Use Edit to add the sub-company count.</Text>
+              )}
+            </Text>
+            {item.registration && (item.registration.contactName || item.registration.phone) ? (
+              <Text style={type.small} numberOfLines={1}>
+                Contact: <Text style={styles.strong}>{[item.registration.contactName, item.registration.phone].filter(Boolean).join(' · ')}</Text>
+              </Text>
+            ) : null}
             <Text style={type.small}>
               Sub-companies: <Text style={styles.strong}>{item.allowSubCompanies ? 'Yes' : 'No'}</Text>
               {item.subCompanyCount > 0 ? ` · ${item.subCompanyCount} linked` : ''}
@@ -376,11 +452,15 @@ export default function AdminCompaniesScreen({ navigation }) {
           onChangeText={setField('email')}
         />
         <Field label="Company name" leadingIcon="building" placeholder="e.g. Brightstar Stores" value={form.companyName} onChangeText={setField('companyName')} />
-        <View style={{ gap: 8 }}>
-          <Text style={styles.label}>Has sub-companies?</Text>
-          <Segmented accessibilityLabel="Has sub-companies" options={YES_NO} value={form.hasSubCompanies} onChange={setField('hasSubCompanies')} />
-          <Text style={type.caption}>Only companies with sub-companies can add and manage them. You can change this later.</Text>
-        </View>
+        <Field label="Contact name" optional leadingIcon="user" placeholder="e.g. Ada Obi" value={form.contactName} onChangeText={setField('contactName')} />
+        <Field label="Phone" optional leadingIcon="phone" placeholder="0803 123 4567" keyboardType="phone-pad" value={form.phone} onChangeText={setField('phone')} />
+        <SubCompanyFields
+          hasSubs={form.hasSubCompanies}
+          onHasSubs={setField('hasSubCompanies')}
+          subCount={form.subCount}
+          onSubCount={setField('subCount')}
+          note={<Text style={type.caption}>Only companies with sub-companies can add and manage them. You can change this later.</Text>}
+        />
         <SubscriptionFields price={form.price} onPrice={setField('price')} />
       </Sheet>
 
@@ -396,15 +476,21 @@ export default function AdminCompaniesScreen({ navigation }) {
         }
       >
         <Field label="Company name" leadingIcon="building" value={editName} onChangeText={setEditName} placeholder="Company name" />
-        <View style={{ gap: 8 }}>
-          <Text style={styles.label}>Has sub-companies?</Text>
-          <Segmented accessibilityLabel="Has sub-companies" options={YES_NO} value={editSubs} onChange={setEditSubs} />
-          {editing && editSubs === 'no' && editing.subCompanyCount > 0 && (
-            <Text style={type.caption}>
-              Its {editing.subCompanyCount} existing sub-{editing.subCompanyCount === 1 ? 'company stays' : 'companies stay'} viewable, but no new ones can be added.
-            </Text>
-          )}
-        </View>
+        <Field label="Contact name" optional leadingIcon="user" placeholder="e.g. Ada Obi" value={editContactName} onChangeText={setEditContactName} />
+        <Field label="Phone" optional leadingIcon="phone" placeholder="0803 123 4567" keyboardType="phone-pad" value={editPhone} onChangeText={setEditPhone} />
+        <SubCompanyFields
+          hasSubs={editSubs}
+          onHasSubs={setEditSubs}
+          subCount={editSubCount}
+          onSubCount={setEditSubCount}
+          note={
+            editing && editSubs === 'no' && editing.subCompanyCount > 0 ? (
+              <Text style={type.caption}>
+                Its {editing.subCompanyCount} existing sub-{editing.subCompanyCount === 1 ? 'company stays' : 'companies stay'} viewable, but no new ones can be added.
+              </Text>
+            ) : null
+          }
+        />
         <SubscriptionFields price={editPrice} onPrice={setEditPrice} />
       </Sheet>
     </Screen>

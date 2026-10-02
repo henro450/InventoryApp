@@ -2,8 +2,19 @@
 
 ## Getting started
 
-**If your company is new**, the platform administrator (SuperAdmin) registers it with your
-email address. You'll get an email saying you've been registered, with a **Set your password**
+**If your company is new**, tap **Sign up your company** on the login screen. Enter your company
+name, whether it has sub-companies (and how many), and your name, email and phone. The
+registration fee depends on how many sub-companies you have:
+
+| Sub-companies | Registration fee |
+| --- | --- |
+| None | ₦2,000 |
+| 1 to 4 | ₦5,000 |
+| 5 or more | ₦10,000 |
+
+No payment is taken in the app; the platform administrator will contact you about it. The
+platform administrator (SuperAdmin) can also register your company for you with your email
+address. Either way, you'll get an email saying you've been registered, with a **Set your password**
 button. Open it on the phone where the app is installed: it opens the app on a Set password
 screen. Choose a password (at least 8 characters), then log in with your email and that
 password. The link expires after 72 hours; if it has, use **Forgot password?** on the login

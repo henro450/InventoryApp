@@ -170,9 +170,12 @@ export default function LoginScreen({ navigation, route }) {
           </Text>
         </View>
 
-        <Text style={styles.footer}>
-          New company? Your administrator registers you, and you'll get an email to set your password.
-        </Text>
+        <View style={styles.signup}>
+          <Text style={styles.signupText}>New company?</Text>
+          <Pressable accessibilityRole="button" onPress={() => navigation.navigate('Signup')} hitSlop={10}>
+            <Text style={styles.signupLink}>Sign up your company</Text>
+          </Pressable>
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -196,5 +199,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line,
   },
   offlineText: { ...type.small, flex: 1 },
-  footer: { marginTop: 'auto', paddingTop: 28, textAlign: 'center', ...type.caption, lineHeight: 18 },
+  signup: { marginTop: 'auto', paddingTop: 28, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  signupText: { ...type.small },
+  signupLink: { fontFamily: fonts.semibold, fontSize: 14, color: colors.primary },
 });
