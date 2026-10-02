@@ -29,6 +29,8 @@ import AlertsScreen from '../screens/AlertsScreen';
 import DebtorsScreen from '../screens/DebtorsScreen';
 import DebtorDetailScreen from '../screens/DebtorDetailScreen';
 import CompanyUsersScreen from '../screens/CompanyUsersScreen';
+import MoneyOutScreen from '../screens/MoneyOutScreen';
+import SavingsScreen from '../screens/SavingsScreen';
 import SplashView from '../components/SplashView';
 import TabBar from '../components/TabBar';
 import { startConnectivityWatcher } from '../sync/syncEngine';
@@ -148,6 +150,9 @@ export default function RootNavigator() {
             {/* People owing from part-paid/credit sales (own company; Main Company can open a Sub's read-only). */}
             <Stack.Screen name="Debtors" component={DebtorsScreen} />
             <Stack.Screen name="DebtorDetail" component={DebtorDetailScreen} />
+            {/* Money out: admins see and record every kind; other users record expenses. */}
+            <Stack.Screen name="MoneyOut" component={MoneyOutScreen} />
+            {isCompanyAdmin && <Stack.Screen name="Savings" component={SavingsScreen} />}
             <Stack.Screen
               name="ScanBarcode"
               component={ScanBarcodeScreen}

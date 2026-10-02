@@ -34,6 +34,19 @@ export const colors = {
   onDarkMuted: '#B9BFD0',
 };
 
+// Money out, by kind: `ink` on light surfaces, `onDark` for the Overview's dark card, `soft` for
+// icon tiles. Calm hues on purpose; money going out is normal, so none of them is red.
+export const outflowColors = {
+  stock: { ink: '#6B7489', onDark: '#B9BFD0', soft: '#ECEEF2' },
+  expense: { ink: '#A8571A', onDark: '#F2B880', soft: '#F6E8DC' },
+  savings: { ink: '#17784A', onDark: '#8FE0B5', soft: '#E3F2EA' },
+  savings_return: { ink: '#5E6371', onDark: '#B9BFD0', soft: '#ECEAE4' },
+  withdrawal: { ink: '#6D4BC2', onDark: '#C9B6F2', soft: '#EEE8FA' },
+  loan: { ink: '#2950C9', onDark: '#93ACF5', soft: '#E7EDFC' },
+  refund: { ink: '#7A6A12', onDark: '#E6D88A', soft: '#F4F0D8' },
+  tax: { ink: '#366B87', onDark: '#8FC3DC', soft: '#E3EFF5' },
+};
+
 export const fonts = {
   regular: 'IBMPlexSans_400Regular',
   medium: 'IBMPlexSans_500Medium',
