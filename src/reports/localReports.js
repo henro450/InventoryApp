@@ -71,9 +71,13 @@ export function getDebtors(companyId) {
 }
 
 // Every sale of one company with its returns, newest first (Sales and Sale detail screens).
-export function getSales(companyId) {
-  const { allItems, transactions } = load([companyId]);
-  return salesHistory(allItems, transactions, companyId);
+// `since` (ISO time) reads only sales from then on (and their returns, which come later).
+export function getSales(companyId, { since } = {}) {
+  if (!since) {
+    const { allItems, transactions } = load([companyId]);
+    return salesHistory(allItems, transactions, companyId);
+  }
+  return salesHistory(getAllLocalItemsForCompanies([companyId]), getLocalTransactions([companyId], { since }), companyId);
 }
 
 // One customer's summary, credit sales and repayments (debtor detail screen).
@@ -153,11 +157,14 @@ export function getRecentCategories(companyId, perKind = 6) {
 // One person's day so far (the staff Today tab).
 export function getToday(user) {
   const companyIds = [user.companyId];
-  const { allItems, transactions, payments } = load(companyIds);
+  const midnight = new Date();
+  midnight.setHours(0, 0, 0, 0);
+  // Today's rows only: a sale's returns come after it, so nothing of today's sales is missed.
+  const transactions = getLocalTransactions(companyIds, { since: midnight.toISOString() });
   return todaySummary({
-    sales: salesHistory(allItems, transactions, user.companyId),
+    sales: salesHistory(getAllLocalItemsForCompanies(companyIds), transactions, user.companyId),
     transactions,
-    debtPayments: payments,
+    debtPayments: getLocalDebtPayments(companyIds),
     supplierPayments: getLocalSupplierPayments(companyIds),
     outflows: getLocalOutflows(companyIds),
     userId: user.id,

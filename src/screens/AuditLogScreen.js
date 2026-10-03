@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { View, SectionList, StyleSheet, RefreshControl, ScrollView } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, SectionList, StyleSheet, RefreshControl, ScrollView, ActivityIndicator } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
 import { getLastSyncedAt, getCached, setCached, getOutboxForCompany, getLocalItemByLocalId, getLocalTransferRows } from '../db/localDb';
@@ -15,6 +15,8 @@ import {
 import { describePayment } from '../utils/payments';
 import { colors, fonts, type } from '../theme';
 
+
+const PAGE_SIZE = 100;
 const ACTIONS = ['create', 'update', 'delete'];
 const ACTION_STYLE = {
   create: { bg: colors.okSoft, fg: colors.ok, icon: 'plus', verb: 'created' },
@@ -221,6 +223,10 @@ export default function AuditLogScreen({ route }) {
   const [toInput, setToInput] = useState('');
   const [appliedDates, setAppliedDates] = useState({ from: '', to: '' });
   const [dateError, setDateError] = useState(null);
+  // Older entries load a page at a time as the list is scrolled (null = nothing more).
+  const [nextCursor, setNextCursor] = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const shownFilters = useRef({}); // the filters the list on screen was loaded with
 
   useLocalRefresh(() => setPending(isOwnCompany ? pendingLogs(user, companyId) : []));
 
@@ -228,8 +234,11 @@ export default function AuditLogScreen({ route }) {
     setError(null);
     try {
       let logs;
+      let cursor = null;
       try {
-        ({ logs } = await api.getAuditLogs(companyId));
+        const page = await api.getAuditLogs(companyId, {}, { limit: PAGE_SIZE });
+        logs = page.logs;
+        cursor = page.nextCursor ?? null;
         setCached(cacheKey, logs);
         setSavedAt(null);
       } catch (err) {
@@ -238,6 +247,8 @@ export default function AuditLogScreen({ route }) {
         logs = saved.data;
         setSavedAt(saved.savedAt);
       }
+      shownFilters.current = {};
+      setNextCursor(cursor);
       setBaseLogs(logs);
       setDisplayLogs(logs);
       setActionFilter(null);
@@ -279,17 +290,41 @@ export default function AuditLogScreen({ route }) {
   // Chips apply immediately; dates apply from their panel.
   async function applyFilters({ action = actionFilter, userId = selectedUserId, from = appliedDates.from, to = appliedDates.to } = {}) {
     const filters = { userId, action, ...rangeBounds({ from, to }) };
+    shownFilters.current = filters;
     if (savedAt) {
       setDisplayLogs(filterLogs(baseLogs, filters));
+      setNextCursor(null);
       return;
     }
     try {
-      const { logs } = await api.getAuditLogs(companyId, filters);
+      const { logs, nextCursor: cursor } = await api.getAuditLogs(companyId, filters, { limit: PAGE_SIZE });
       setDisplayLogs(logs);
+      setNextCursor(cursor ?? null);
       setError(null);
     } catch {
       // Lost the connection since loading: filter the copy already on screen instead.
       setDisplayLogs(filterLogs(baseLogs, filters));
+      setNextCursor(null);
+    }
+  }
+
+  async function loadMore() {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    const filters = shownFilters.current;
+    try {
+      const page = await api.getAuditLogs(companyId, filters, { limit: PAGE_SIZE, before: nextCursor });
+      if (shownFilters.current !== filters) return; // the filters changed while this loaded
+      const seen = new Set(displayLogs.map((l) => l.id));
+      const older = page.logs.filter((l) => !seen.has(l.id));
+      setDisplayLogs((logs) => [...logs, ...older]);
+      // Unfiltered pages also widen the user chips.
+      if (!Object.values(filters).some(Boolean)) setBaseLogs((logs) => [...logs, ...older]);
+      setNextCursor(page.nextCursor ?? null);
+    } catch {
+      // Offline: the "Load older entries" button stays for another try.
+    } finally {
+      setLoadingMore(false);
     }
   }
 
@@ -430,6 +465,15 @@ export default function AuditLogScreen({ route }) {
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
         ListEmptyComponent={<EmptyState icon="list" title="No audit activity yet" body="Creates, updates and deletes will show up here." />}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={
+          nextCursor ? (
+            <View style={styles.more}>
+              {loadingMore ? <ActivityIndicator color={colors.ink3} /> : <Button title="Load older entries" variant="ghost" height={44} onPress={loadMore} />}
+            </View>
+          ) : null
+        }
         renderSectionHeader={({ section }) => <Text style={styles.day}>{section.title}</Text>}
         renderItem={({ item, index, section }) => (
           <Entry log={item} first={index === 0} last={index === section.data.length - 1} />
@@ -472,6 +516,7 @@ function Entry({ log, first, last }) {
 }
 
 const styles = StyleSheet.create({
+  more: { paddingVertical: 12, alignItems: 'center' },
   readOnlyWrap: { paddingHorizontal: 20, paddingTop: 2, paddingBottom: 12, gap: 14 },
   content: { paddingHorizontal: 20, paddingBottom: 32 },
   filters: { gap: 12, paddingBottom: 4 },

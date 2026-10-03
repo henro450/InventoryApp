@@ -7,6 +7,7 @@ import { fingerprintAvailable } from '../auth/biometrics';
 import { APPEARANCES, getAppearancePref, setAppearancePref, needsRestartFor } from '../theme/scheme';
 import { chooseItemPhoto } from '../utils/itemPhotos';
 import { readAsBase64 } from '../utils/files';
+import { appVersionLabel, canRestartApp, checkForAppUpdate, restartApp } from '../utils/appUpdates';
 import { formatPhone } from '../utils/phone';
 import {
   Text, Screen, NavHeader, Card, SectionTitle, Field, Button, Segmented, Note, Checkbox, IconButton, LetterTile,
@@ -31,6 +32,7 @@ export default function AccountScreen({ navigation }) {
           <AppearanceSection />
           <PasswordSection forgetFingerprint={forgetFingerprint} fingerprintEnabled={fingerprintEnabled} />
           <FingerprintSection enabled={fingerprintEnabled} onEnable={enableFingerprint} onDisable={turnOffFingerprint} />
+          <AboutSection />
           {isCompanyAdmin && (
             <View style={{ gap: 10 }}>
               <Button title="Subscription" variant="secondary" icon="wallet" height={48} onPress={() => navigation.navigate('Subscription')} />
@@ -233,7 +235,15 @@ function AppearanceSection() {
         <Text style={type.caption}>
           {pref === 'system' ? 'Light or dark, following your phone’s dark mode setting.' : `Always ${pref}, whatever your phone is set to.`}
         </Text>
-        {restart && <Note icon="info">Close and reopen the app to see the change.</Note>}
+        {restart &&
+          (canRestartApp() ? (
+            <View style={{ gap: 10 }}>
+              <Note icon="info">The app needs to restart to show the change.</Note>
+              <Button title="Restart now" variant="secondary" height={44} onPress={() => restartApp().catch(() => {})} />
+            </View>
+          ) : (
+            <Note icon="info">Close and reopen the app to see the change.</Note>
+          ))}
       </Card>
     </View>
   );
@@ -335,6 +345,39 @@ function FingerprintSection({ enabled, onEnable, onDisable }) {
           checked={enabled}
           onChange={(on) => (on ? onEnable() : onDisable())}
         />
+      </Card>
+    </View>
+  );
+}
+
+function AboutSection() {
+  const [status, setStatus] = useState(null); // null | 'checking' | 'ready' | 'none' | 'error'
+  if (!canRestartApp()) {
+    return <Text style={[type.caption, { textAlign: 'center' }]}>Version {appVersionLabel()}</Text>;
+  }
+
+  async function check() {
+    setStatus('checking');
+    setStatus(await checkForAppUpdate());
+  }
+
+  return (
+    <View style={styles.section}>
+      <SectionTitle title="App version" />
+      <Card>
+        <Text style={type.body}>{appVersionLabel()}</Text>
+        {status === 'ready' ? (
+          <>
+            <Text style={type.caption}>An update is ready. It's used next time the app opens, or restart now.</Text>
+            <Button title="Restart now" height={44} onPress={() => restartApp().catch(() => {})} />
+          </>
+        ) : (
+          <>
+            {status === 'none' && <Text style={type.caption}>You have the latest version.</Text>}
+            {status === 'error' && <Text style={type.caption}>Couldn't check. Connect to the internet and try again.</Text>}
+            <Button title="Check for updates" variant="secondary" height={44} loading={status === 'checking'} onPress={check} />
+          </>
+        )}
       </Card>
     </View>
   );

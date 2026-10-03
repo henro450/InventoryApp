@@ -90,6 +90,14 @@ export const api = {
   adminCompanyUsers: (id) => request(`/admin/companies/${id}/users`),
   adminGetSettings: () => request('/admin/settings'),
   adminUpdateSettings: (payload) => request('/admin/settings', { method: 'PUT', body: payload }),
+  // Crash and error reports (newest first, paged): { reports, nextCursor }.
+  adminListErrors: ({ source, before } = {}) => {
+    const params = new URLSearchParams({ limit: '50' });
+    if (source) params.set('source', source);
+    if (before) params.set('before', before);
+    return request(`/admin/error-reports?${params.toString()}`);
+  },
+  adminClearError: (id) => request(`/admin/error-reports/${id}`, { method: 'DELETE' }),
   adminListPayments: (status) => request(`/admin/payments${status ? `?status=${status}` : ''}`),
   adminApprovePayment: (id, note) => request(`/admin/payments/${id}/approve`, { method: 'POST', body: { note } }),
   adminRejectPayment: (id, note) => request(`/admin/payments/${id}/reject`, { method: 'POST', body: { note } }),
@@ -129,8 +137,11 @@ export const api = {
 
   createTransaction: (payload) => request('/transactions', { method: 'POST', body: payload }),
 
-  getAuditLogs: (companyId, { userId, action, from, to } = {}) => {
+  // A page of the log, newest first: { logs, nextCursor }. Pass nextCursor back as `before`.
+  getAuditLogs: (companyId, { userId, action, from, to } = {}, { limit, before } = {}) => {
     const params = new URLSearchParams();
+    if (limit) params.set('limit', String(limit));
+    if (before) params.set('before', before);
     if (companyId) params.set('companyId', companyId);
     if (userId) params.set('userId', userId);
     if (action) params.set('action', action);

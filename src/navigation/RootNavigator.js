@@ -21,6 +21,9 @@ import InventoryScreen from '../screens/InventoryScreen';
 import AddItemScreen from '../screens/AddItemScreen';
 import AccountScreen from '../screens/AccountScreen';
 import TodayScreen from '../screens/TodayScreen';
+import AdminErrorsScreen from '../screens/AdminErrorsScreen';
+import { setCurrentScreen } from '../utils/errorReporting';
+import { useBackgroundUpdates } from '../utils/appUpdates';
 import StockTransactionScreen from '../screens/StockTransactionScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import ReportsScreen from '../screens/ReportsScreen';
@@ -115,6 +118,7 @@ function HomeTabs() {
 
 export default function RootNavigator() {
   const { user, loading, isMainCompany, isSuperAdmin, isCompanyAdmin, allowSubCompanies, refreshUser } = useAuth();
+  useBackgroundUpdates();
 
   useEffect(() => {
     if (!user || isSuperAdmin) return;
@@ -171,7 +175,12 @@ export default function RootNavigator() {
   if (loading) return <SplashView />;
 
   return (
-    <NavigationContainer ref={navigationRef} theme={navTheme} linking={linking}>
+    <NavigationContainer
+      ref={navigationRef}
+      theme={navTheme}
+      linking={linking}
+      onStateChange={() => setCurrentScreen(navigationRef.getCurrentRoute()?.name)}
+    >
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.ground} />
       <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.ground } }}>
         {!user ? (
@@ -186,6 +195,7 @@ export default function RootNavigator() {
             <Stack.Screen name="AdminSettings" component={AdminSettingsScreen} />
             <Stack.Screen name="AdminPayments" component={AdminPaymentsScreen} />
             <Stack.Screen name="AdminPaymentDetail" component={AdminPaymentDetailScreen} />
+            <Stack.Screen name="AdminErrors" component={AdminErrorsScreen} />
           </>
         ) : (
           <>

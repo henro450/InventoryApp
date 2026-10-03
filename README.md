@@ -27,6 +27,35 @@ npm start
 This opens the Expo dev tools — scan the QR code with the Expo Go app on your phone, or
 press `a` for an Android emulator / `i` for an iOS simulator.
 
+## Tests and checks
+
+- `npm test` runs the unit tests for the sale, report and Today maths (`test/`). They need only
+  Node 22, no install: `test/support/` lets Node load the app's source files as Metro does.
+- `scripts/check-sources.js` parses every file and checks every relative import.
+- Both run on every pull request (`.github/workflows/checks.yml`).
+
+## Releasing updates without a store release
+
+The app uses Expo updates. A fix that only changes JavaScript or images can go straight to
+phones:
+
+- `npm run update:preview` sends the current code to preview builds (internal testers).
+- `npm run update:production` sends it to production builds.
+
+Phones download an update when the app opens or comes back to the foreground, and use it from
+the next start. Account and settings shows the version and has "Check for updates".
+
+Updates only reach builds with the same `version` in `app.json` (`runtimeVersion` follows it).
+After adding or upgrading anything native (a new `expo-*` package, a permission, a plugin, an
+`app.json` change outside `updates`), raise `version` and make a new build with
+`eas build`. The first build with this setup is needed before any update can arrive.
+
+## Error reports
+
+Release builds send crashes and unhandled errors to the API (`src/utils/errorReporting.js`),
+including the screen, app version and update. They're queued on the phone while offline. The
+SuperAdmin sees them under Account > App errors, grouped with a count, and can mark them fixed.
+
 ## Project structure
 
 ```

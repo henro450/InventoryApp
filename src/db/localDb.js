@@ -148,6 +148,7 @@ export function initLocalDb() {
     );
 
     CREATE INDEX IF NOT EXISTS money_outflows_company_idx ON money_outflows (companyId, occurredAt);
+    CREATE INDEX IF NOT EXISTS stock_transactions_company_time_idx ON stock_transactions (companyId, occurredAt);
 
     CREATE TABLE IF NOT EXISTS savings_goals (
       clientGoalId TEXT PRIMARY KEY,
@@ -1102,9 +1103,14 @@ export function getAllLocalItemsForCompanies(companyIds) {
 
 // Every stock transaction on this device for the given companies — synced history plus this
 // device's unsynced ones.
-export function getLocalTransactions(companyIds) {
+// `since` (ISO time) limits it to rows at or after that moment, so screens showing a recent period
+// don't read a year of history.
+export function getLocalTransactions(companyIds, { since } = {}) {
   if (!companyIds.length) return [];
   const marks = companyIds.map(() => '?').join(',');
+  if (since) {
+    return db.getAllSync(`SELECT * FROM stock_transactions WHERE companyId IN (${marks}) AND occurredAt >= ?`, [...companyIds, since]);
+  }
   return db.getAllSync(`SELECT * FROM stock_transactions WHERE companyId IN (${marks})`, companyIds);
 }
 

@@ -159,6 +159,7 @@ export function AccountButton({ user, onLogout }) {
             <Button title="Manage users" variant="secondary" icon="user" height={48} onPress={() => go('CompanyUsers')} />
           </View>
         )}
+        {isSuperAdmin && <Button title="App errors" variant="secondary" icon="alert" height={48} onPress={() => go('AdminErrors')} />}
         {fingerprintEnabled && (
           <Button
             title="Turn off fingerprint login"

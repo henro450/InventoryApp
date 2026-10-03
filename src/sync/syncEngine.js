@@ -25,6 +25,7 @@ import {
 } from '../db/localDb';
 import { uploadPendingReceipts } from '../utils/receiptPhotos';
 import { uploadPendingItemPhotos } from '../utils/itemPhotos';
+import { reportError, flushErrorReports } from '../utils/errorReporting';
 
 let syncInProgress = false;
 
@@ -184,8 +185,13 @@ export async function runSync(userId) {
 
     const result = { success: true, operationsSynced, pulledChanges, cursor };
     if (operationsSynced > 0 || pulledChanges > 0) notifySyncListeners(result);
+    // Online now, so send any error reports saved while offline.
+    flushErrorReports();
     return result;
   } catch (err) {
+    // A bug in applying changes is worth knowing about; a dropped connection or a server
+    // error (the API keeps its own) isn't.
+    if (!err.status && !/reach the server|too long to respond/i.test(err.message || '')) reportError(err, { during: 'sync' });
     return { error: err.message };
   } finally {
     syncInProgress = false;
