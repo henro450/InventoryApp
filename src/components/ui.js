@@ -141,8 +141,18 @@ export function AccountButton({ user, onLogout }) {
         <Text style={styles.avatarText}>{initials(user?.name)}</Text>
       </Pressable>
       <Sheet visible={open} onClose={() => setOpen(false)} title={user?.name || 'Account'} description={user?.email || undefined}>
+        {!isSuperAdmin && (
+          <Button
+            title={isCompanyAdmin ? 'Money out' : 'Expenses'}
+            variant="secondary"
+            icon="receipt"
+            height={48}
+            onPress={() => go('MoneyOut')}
+          />
+        )}
         {isCompanyAdmin && !isSuperAdmin && (
           <View style={{ gap: 10 }}>
+            <Button title="Savings" variant="secondary" icon="piggy" height={48} onPress={() => go('Savings')} />
             <Button title="Subscription" variant="secondary" icon="wallet" height={48} onPress={() => go('Subscription')} />
             <Button title="Manage users" variant="secondary" icon="user" height={48} onPress={() => go('CompanyUsers')} />
           </View>

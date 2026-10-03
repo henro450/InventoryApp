@@ -7,6 +7,7 @@ import { useLocalRefresh } from '../hooks/useLocalRefresh';
 import { ROLES } from '../constants/roles';
 import { formatDate, formatDateTime, formatMoney, formatTime, formatYmd, lastSyncedLabel, rangeBounds, dateToYmd } from '../utils/format';
 import Icon from '../components/Icon';
+import { KIND_META } from '../utils/outflows';
 import {
   Text, Screen, LargeHeader, NavHeader, IconButton, Chip, Card, DateField, Button, Banner, EmptyState, Loading,
   CompanySwitcher, ReadOnlyBanner, Pill, AccountButton,
@@ -52,7 +53,8 @@ function describe(log) {
   const oldV = parse(log.oldValue);
   const newV = parse(log.newValue);
   const snapshot = newV || oldV || {};
-  const subject = snapshot.name || snapshot.itemName || snapshot.companyName || `${humanize(log.entityType || 'Record')} #${log.entityId}`;
+  const outflowName = snapshot.clientOutflowId ? snapshot.category || KIND_META[snapshot.kind]?.short : null;
+  const subject = snapshot.name || snapshot.itemName || snapshot.companyName || outflowName || `${humanize(log.entityType || 'Record')} #${log.entityId}`;
 
   let detail = null;
   if (log.action === 'update' && oldV && newV) {
@@ -68,6 +70,10 @@ function describe(log) {
     }${newV.type === 'out' && newV.amountPaid != null ? ` · paid ${formatMoney(newV.amountPaid)}${newV.customerName ? `, owed by ${newV.customerName}` : ''}` : ''}`;
   } else if (log.action === 'create' && newV && newV.clientPaymentId && newV.amount != null) {
     detail = `Repayment · ${formatMoney(newV.amount)} · ${newV.paymentMethod === 'transfer' ? 'Transfer' : 'Cash'}`;
+  } else if (log.action === 'create' && newV && newV.clientOutflowId && newV.amount != null) {
+    detail = `${KIND_META[newV.kind]?.label || 'Money out'} · ${formatMoney(newV.amount)} · ${newV.paymentMethod === 'transfer' ? 'Transfer' : 'Cash'}`;
+  } else if (log.action === 'delete' && oldV && oldV.clientOutflowId && oldV.amount != null) {
+    detail = `Deleted ${formatMoney(oldV.amount)} ${KIND_META[oldV.kind]?.short?.toLowerCase() || 'entry'}`;
   }
   return { subject, detail };
 }
@@ -77,6 +83,8 @@ function describe(log) {
 // server audit entry; they're listed first as "Waiting to sync".
 const PENDING_ACTION = {
   'item.create': 'create', 'item.update': 'update', 'item.delete': 'delete', 'stock_transaction.create': 'create', 'debt_payment.create': 'create',
+  'money_outflow.create': 'create', 'money_outflow.update': 'update', 'money_outflow.delete': 'delete',
+  'savings_goal.create': 'create', 'savings_goal.update': 'update',
 };
 
 function pendingLogs(user, companyId) {
@@ -93,6 +101,20 @@ function pendingLogs(user, companyId) {
         role: user.role,
         occurredAt: op.payload.occurredAt || op.createdAt,
         newValue: { ...op.payload, name: op.payload.customerName },
+      };
+    }
+    if (op.entityType === 'money_outflow' || op.entityType === 'savings_goal') {
+      return {
+        id: `pending-${op.operationId}`,
+        pending: true,
+        action: PENDING_ACTION[op.operationType] || 'update',
+        entityType: op.entityType === 'money_outflow' ? 'MoneyOutflow' : 'SavingsGoal',
+        entityId: op.entityLocalId,
+        userId: user.id,
+        role: user.role,
+        occurredAt: op.payload.occurredAt || op.createdAt,
+        newValue: op.operationType === 'money_outflow.create' ? op.payload : null,
+        oldValue: op.operationType === 'money_outflow.create' ? null : op.payload,
       };
     }
     const item = isTransaction && op.payload.clientItemId ? getLocalItemByLocalId(op.payload.clientItemId) : null;

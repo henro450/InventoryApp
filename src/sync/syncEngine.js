@@ -15,6 +15,8 @@ import {
   deletePulledTransaction,
   upsertLocalCompany,
   upsertPulledDebtPayment,
+  upsertPulledOutflow,
+  upsertPulledSavingsGoal,
   deferItemChange,
   getDeferredChanges,
   removeDeferredChange,
@@ -70,15 +72,19 @@ function applyItemChange(operation, item, userId) {
   });
 }
 
-// The feed carries companies, items, stock transactions, and debt repayments for every company
-// this user can see. All are kept so reports, debtors, alerts, and the dashboard can be computed
-// on the device.
+// The feed carries companies, items, stock transactions, debt repayments, money out and savings
+// goals for every company this user can see. All are kept so reports, debtors, alerts, and the
+// dashboard can be computed on the device.
 function applyChange(change, userId) {
   if (!change.data) return;
   if (change.entityType === 'company') {
     upsertLocalCompany(change.data, { deleted: change.operation === 'delete' });
   } else if (change.entityType === 'debt_payment') {
     upsertPulledDebtPayment(change.data, userId);
+  } else if (change.entityType === 'money_outflow') {
+    upsertPulledOutflow(change.data, userId, { deleted: change.operation === 'delete' });
+  } else if (change.entityType === 'savings_goal') {
+    upsertPulledSavingsGoal(change.data, userId);
   } else if (change.entityType === 'stock_transaction') {
     if (change.operation === 'delete') deletePulledTransaction(change.data.clientTransactionId);
     else upsertPulledTransaction(change.data, userId);

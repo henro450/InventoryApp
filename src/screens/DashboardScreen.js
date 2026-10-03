@@ -2,18 +2,21 @@ import React, { useState } from 'react';
 import { View, ScrollView, Pressable, StyleSheet, RefreshControl } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { getLocalItems, getLastSyncedAt, getSyncStatusSummary, getLocalSubCompanies } from '../db/localDb';
-import { getOversightSummary, getDebtors } from '../reports/localReports';
+import { getOversightSummary, getDebtors, getMoneyOut, getDueRepeats } from '../reports/localReports';
 import { useLocalRefresh } from '../hooks/useLocalRefresh';
 import { useOnline } from '../hooks/useOnline';
 import { runSync } from '../sync/syncEngine';
 import { isLowStock } from '../utils/inventory';
 import { formatMoney, formatNumber, lastSyncedLabel, plural, timeAgo } from '../utils/format';
+import { KIND_META } from '../utils/outflows';
+import { SPENDING_KINDS } from '../reports/outflowMath';
 import Icon from '../components/Icon';
+import DueBill, { dueRecordValues } from '../components/DueBill';
 import {
   Text, Screen, LargeHeader, IconButton, AccountButton, Pill, SectionTitle, ListCard, Divider,
   LetterTile, EmptyState, Loading,
 } from '../components/ui';
-import { colors, fonts, type } from '../theme';
+import { colors, fonts, outflowColors, type } from '../theme';
 
 // RPT-06: Main Company dashboard. If there are no linked Sub Companies, this simply shows
 // an empty state below — a standalone company (ROLE-07) is not treated as an error state.
@@ -28,12 +31,16 @@ export default function DashboardScreen({ navigation }) {
   const [syncSummary, setSyncSummary] = useState({ total: 0 });
   const [summary, setSummary] = useState(null);
   const [debt, setDebt] = useState(null);
+  const [moneyOut, setMoneyOut] = useState(null);
+  const [dues, setDues] = useState([]);
   const online = useOnline();
 
   function load() {
     setSubCompanies(getLocalSubCompanies(user.companyId));
     setSummary(getOversightSummary(user));
     setDebt(getDebtors(user.companyId).totals);
+    setMoneyOut(getMoneyOut(user).totals);
+    setDues(getDueRepeats(user.companyId));
     // INV-05: own-company low-stock count only — not aggregated across Sub Companies.
     setLowStockCount(getLocalItems(user.companyId).filter(isLowStock).length);
     setSyncSummary(getSyncStatusSummary(user.id));
@@ -55,7 +62,12 @@ export default function DashboardScreen({ navigation }) {
   const ownRow = summary?.companies?.find((c) => c.isMain);
   const statsById = new Map((summary?.companies || []).map((c) => [String(c.companyId), c]));
   const lastSynced = getLastSyncedAt(user.id);
-  const heroMax = totals ? Math.max(totals.totalSalesRevenue, totals.totalPurchaseCost) : 0;
+  // Stock bought comes from the same transactions as the summary; other money out and savings
+  // from recorded outflows. Falls back to the summary's stock cost before outflows have loaded.
+  const out = moneyOut || { byKind: { stock: totals?.totalPurchaseCost || 0 }, spent: totals?.totalPurchaseCost || 0, savingsNet: 0 };
+  const outKinds = SPENDING_KINDS.filter((k) => (out.byKind[k] || 0) > 0);
+  const savingsNet = Math.max(0, out.savingsNet);
+  const heroMax = totals ? Math.max(totals.totalSalesRevenue, out.spent, savingsNet) : 0;
 
   return (
     <Screen>
@@ -102,31 +114,55 @@ export default function DashboardScreen({ navigation }) {
           <Text style={type.caption}>Figures below include the changes from this phone that haven't synced yet.</Text>
         )}
 
+        {dues.slice(0, 2).map((d) => (
+          <DueBill key={d.outflow.clientOutflowId} due={d} onRecord={() => navigation.navigate('MoneyOut', { record: dueRecordValues(d) })} />
+        ))}
+
         {totals && (
-          <View style={styles.hero}>
-            <Text style={styles.heroLabel}>Money in and out · all companies</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityHint="Opens everything that went out"
+            onPress={() => navigation.navigate('MoneyOut', { period: 'all' })}
+            style={({ pressed }) => [styles.hero, pressed && { opacity: 0.92 }]}
+          >
+            <View style={styles.heroHead}>
+              <Text style={styles.heroLabel}>Money in and out · all companies</Text>
+              <View style={styles.heroMore}>
+                <Text style={styles.heroMoreText}>Details</Text>
+                <Icon name="chev" size={14} color="#FFFFFF" />
+              </View>
+            </View>
             <View style={styles.heroRows}>
-              {[
-                { label: 'Money from sales', value: totals.totalSalesRevenue, color: colors.okOnDark },
-                { label: 'Spent on stock', value: totals.totalPurchaseCost, color: colors.onDarkMuted },
-              ].map((row) => (
-                <View key={row.label} style={{ gap: 6 }}>
-                  <View style={styles.heroRowTop}>
-                    <Text style={styles.heroStatLabel}>{row.label}</Text>
-                    <Text style={styles.heroValue} adjustsFontSizeToFit numberOfLines={1}>
-                      {formatMoney(row.value)}
-                    </Text>
-                  </View>
-                  <View style={styles.heroBarTrack}>
-                    <View style={[styles.heroBar, { backgroundColor: row.color, width: `${barWidth(row.value, heroMax)}%` }]} />
-                  </View>
+              <HeroRow label="Money from sales" value={totals.totalSalesRevenue}>
+                <View style={[styles.heroBar, { backgroundColor: colors.okOnDark, width: `${barWidth(totals.totalSalesRevenue, heroMax)}%` }]} />
+              </HeroRow>
+              <HeroRow label="Money out" value={out.spent}>
+                <View style={[styles.heroStack, { width: `${barWidth(out.spent, heroMax)}%` }]}>
+                  {outKinds.map((k) => (
+                    <View key={k} style={{ flex: out.byKind[k], backgroundColor: outflowColors[k].onDark }} />
+                  ))}
                 </View>
-              ))}
+              </HeroRow>
+              {outKinds.length > 1 && (
+                <View style={styles.legend}>
+                  {outKinds.map((k) => (
+                    <View key={k} style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: outflowColors[k].onDark }]} />
+                      <Text style={styles.legendText}>{KIND_META[k].short}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+              {savingsNet > 0 && (
+                <HeroRow label="Set aside in savings" value={savingsNet}>
+                  <View style={[styles.heroBar, { backgroundColor: outflowColors.savings.onDark, width: `${barWidth(savingsNet, heroMax)}%` }]} />
+                </HeroRow>
+              )}
             </View>
             <View style={styles.heroDivider} />
-            <Text style={styles.heroDiff}>{differenceSentence(totals.margin, totals.totalSalesRevenue)}</Text>
+            <Text style={styles.heroDiff}>{differenceSentence(totals.totalSalesRevenue, out.spent, savingsNet)}</Text>
             <Text style={styles.heroSync}>{lastSyncedLabel(lastSynced)}</Text>
-          </View>
+          </Pressable>
         )}
 
         {totals && (
@@ -245,7 +281,15 @@ const styles = StyleSheet.create({
   },
   debtTitle: { fontFamily: fonts.semibold, fontSize: 15 },
   hero: { backgroundColor: colors.ink, borderRadius: 22, padding: 20, gap: 16 },
-  heroLabel: { fontFamily: fonts.medium, fontSize: 13, color: colors.onDarkMuted },
+  heroHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  heroLabel: { flexShrink: 1, fontFamily: fonts.medium, fontSize: 13, color: colors.onDarkMuted },
+  heroMore: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  heroMoreText: { fontFamily: fonts.semibold, fontSize: 13, color: '#FFFFFF' },
+  heroStack: { height: 6, flexDirection: 'row', gap: 2, borderRadius: 3, overflow: 'hidden' },
+  legend: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12, rowGap: 4, marginTop: -6 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  legendDot: { width: 7, height: 7, borderRadius: 2 },
+  legendText: { fontSize: 11, color: colors.onDarkMuted },
   heroRows: { gap: 14 },
   heroRowTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 },
   heroStatLabel: { fontSize: 13, color: colors.onDarkMuted },
@@ -276,14 +320,30 @@ function barWidth(value, max) {
   return Math.max(2, Math.round((value / max) * 100));
 }
 
-// Plain-words difference between money from sales and money spent on stock, so the card never
-// leads with a minus sign. Rounded to whole naira since it's a summary, not a ledger line.
-function differenceSentence(margin, salesRevenue) {
-  const amount = formatMoney(Math.round(Math.abs(margin))).replace(/\.00$/, '');
-  if (Math.abs(margin) < 0.005) return 'Sales and stock spending are even so far';
-  if (margin > 0) {
-    const share = salesRevenue > 0 ? ` · ${Math.round((margin / salesRevenue) * 100)}% of sales` : '';
-    return `${amount} more from sales than spent on stock${share}`;
+function HeroRow({ label, value, children }) {
+  return (
+    <View style={{ gap: 6 }}>
+      <View style={styles.heroRowTop}>
+        <Text style={styles.heroStatLabel}>{label}</Text>
+        <Text style={styles.heroValue} adjustsFontSizeToFit numberOfLines={1}>
+          {formatMoney(value)}
+        </Text>
+      </View>
+      <View style={styles.heroBarTrack}>{children}</View>
+    </View>
+  );
+}
+
+// Plain-words result of money from sales against everything that went out and into savings, so
+// the card never leads with a minus sign. Rounded to whole naira since it's a summary.
+function differenceSentence(sales, spent, saved) {
+  const left = sales - spent - saved;
+  const amount = formatMoney(Math.round(Math.abs(left))).replace(/\.00$/, '');
+  const what = saved > 0 ? 'spending and saving' : 'spending';
+  if (Math.abs(left) < 0.005) return `Sales and ${what} are even so far`;
+  if (left > 0) {
+    const share = sales > 0 ? ` · ${Math.round((left / sales) * 100)}% of sales` : '';
+    return `${amount} left from sales after ${what}${share}`;
   }
-  return `${amount} more spent on stock than sold`;
+  return `${amount} more went out than came in from sales`;
 }

@@ -111,6 +111,41 @@ export function initLocalDb() {
       createdByUserId INTEGER
     );
 
+    -- Money out other than stock purchases (expenses, savings, withdrawals, loans, refunds, taxes)
+    -- and the savings goals that savings point at. Synced history plus this device's unsynced
+    -- entries, like debt_payments. See saveLocalOutflow / saveLocalSavingsGoal.
+    CREATE TABLE IF NOT EXISTS money_outflows (
+      clientOutflowId TEXT PRIMARY KEY,
+      id INTEGER,
+      companyId INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      category TEXT,
+      clientGoalId TEXT,
+      amount REAL NOT NULL,
+      paymentMethod TEXT NOT NULL,
+      note TEXT,
+      repeatsMonthly INTEGER DEFAULT 0,
+      occurredAt TEXT NOT NULL,
+      syncStatus TEXT DEFAULT 'pending',
+      userId INTEGER,
+      createdByUserId INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS money_outflows_company_idx ON money_outflows (companyId, occurredAt);
+
+    CREATE TABLE IF NOT EXISTS savings_goals (
+      clientGoalId TEXT PRIMARY KEY,
+      id INTEGER,
+      companyId INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      targetAmount REAL,
+      targetDate TEXT,
+      isActive INTEGER DEFAULT 1,
+      createdAt TEXT,
+      syncStatus TEXT DEFAULT 'pending',
+      userId INTEGER
+    );
+
     -- Last server response for data only the server has (audit log, snapshots, sub-company
     -- invite status), shown as a saved copy when offline.
     CREATE TABLE IF NOT EXISTS api_cache (
@@ -524,7 +559,7 @@ export function getPendingOperations(userId, limit = 50) {
      WHERE userId = ?
        AND (status = 'pending' OR (status = 'failed' AND (nextRetryAt IS NULL OR nextRetryAt <= ?)))
      ORDER BY
-       CASE operationType WHEN 'item.create' THEN 0 WHEN 'item.update' THEN 1 WHEN 'item.delete' THEN 1 ELSE 2 END,
+       CASE operationType WHEN 'item.create' THEN 0 WHEN 'savings_goal.create' THEN 0 WHEN 'item.update' THEN 1 WHEN 'item.delete' THEN 1 ELSE 2 END,
        createdAt ASC
      LIMIT ?`,
     [userId, now, limit]
@@ -560,6 +595,14 @@ export function markOperationApplied(operationId, result) {
         result.serverId ?? null,
         operation.entityLocalId,
       ]);
+    } else if (operation.entityType === 'money_outflow' || operation.entityType === 'savings_goal') {
+      const { table, key } = OUTFLOW_TABLES[operation.entityType];
+      const remaining = db.getFirstSync('SELECT COUNT(*) AS count FROM outbox WHERE entityLocalId = ?', [operation.entityLocalId]);
+      db.runSync(`UPDATE ${table} SET syncStatus = ?, id = COALESCE(?, id) WHERE ${key} = ?`, [
+        remaining.count ? 'pending' : 'synced',
+        result.serverId ?? null,
+        operation.entityLocalId,
+      ]);
     } else if (operation.entityType === 'stock_transaction') {
       db.runSync(
         `UPDATE stock_transactions
@@ -591,6 +634,9 @@ export function markOperationFailed(operationId, errorMessage) {
     db.runSync("UPDATE items SET syncStatus = 'failed' WHERE localId = ?", [row.entityLocalId]);
   } else if (row.entityType === 'debt_payment') {
     db.runSync("UPDATE debt_payments SET syncStatus = 'failed' WHERE clientPaymentId = ?", [row.entityLocalId]);
+  } else if (OUTFLOW_TABLES[row.entityType]) {
+    const { table, key } = OUTFLOW_TABLES[row.entityType];
+    db.runSync(`UPDATE ${table} SET syncStatus = 'failed' WHERE ${key} = ?`, [row.entityLocalId]);
   } else {
     db.runSync("UPDATE stock_transactions SET syncStatus = 'failed' WHERE clientTransactionId = ?", [row.entityLocalId]);
   }
@@ -677,6 +723,7 @@ export function clearLocalData() {
   db.execSync(
     'DELETE FROM outbox; DELETE FROM items; DELETE FROM stock_transactions; DELETE FROM companies; ' +
     'DELETE FROM deferred_changes; DELETE FROM api_cache; DELETE FROM debt_payments; ' +
+    'DELETE FROM money_outflows; DELETE FROM savings_goals; ' +
     "DELETE FROM sync_meta WHERE key <> 'schemaVersion';"
   );
 }
@@ -850,6 +897,174 @@ export function getLocalDebtPayments(companyIds) {
   if (!companyIds.length) return [];
   const marks = companyIds.map(() => '?').join(',');
   return db.getAllSync(`SELECT * FROM debt_payments WHERE companyId IN (${marks})`, companyIds);
+}
+
+// --- Money out and savings goals ---
+
+const OUTFLOW_TABLES = {
+  money_outflow: { table: 'money_outflows', key: 'clientOutflowId' },
+  savings_goal: { table: 'savings_goals', key: 'clientGoalId' },
+};
+
+function hasPendingOperation(entityLocalId) {
+  return !!db.getFirstSync('SELECT 1 FROM outbox WHERE entityLocalId = ? LIMIT 1', [entityLocalId]);
+}
+
+// Money leaving the business, saved on the device first with its outbox operation. A savings
+// entry for a brand-new goal passes `newGoal`, so the goal and the deposit are saved together
+// (the goal's operation is pushed first, see getPendingOperations).
+export function saveLocalOutflow(outflow, { newGoal } = {}) {
+  const record = {
+    ...outflow,
+    category: outflow.category?.trim() || null,
+    note: outflow.note?.trim() || null,
+    clientGoalId: outflow.clientGoalId || null,
+    repeatsMonthly: !!outflow.repeatsMonthly,
+  };
+  return runLocalTransaction(() => {
+    if (newGoal) saveGoalRow(newGoal);
+    db.runSync(
+      `INSERT INTO money_outflows
+         (clientOutflowId, companyId, kind, category, clientGoalId, amount, paymentMethod, note, repeatsMonthly,
+          occurredAt, syncStatus, userId, createdByUserId)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      [record.clientOutflowId, record.companyId, record.kind, record.category, record.clientGoalId, record.amount,
+        record.paymentMethod, record.note, record.repeatsMonthly ? 1 : 0, record.occurredAt, record.userId, record.userId]
+    );
+    insertOutboxOperation({
+      operationId: record.clientOutflowId,
+      userId: record.userId,
+      companyId: record.companyId,
+      entityType: 'money_outflow',
+      entityLocalId: record.clientOutflowId,
+      operationType: 'money_outflow.create',
+      payload: {
+        clientOutflowId: record.clientOutflowId,
+        kind: record.kind,
+        category: record.category,
+        clientGoalId: record.clientGoalId,
+        amount: record.amount,
+        paymentMethod: record.paymentMethod,
+        note: record.note,
+        repeatsMonthly: record.repeatsMonthly,
+        occurredAt: record.occurredAt,
+      },
+    });
+  });
+}
+
+// Admin edits after the fact: stop a monthly repeat, or delete a mistaken entry.
+export function updateLocalOutflow(outflow, changes, userId) {
+  return runLocalTransaction(() => {
+    if (changes.delete) {
+      db.runSync('DELETE FROM money_outflows WHERE clientOutflowId = ?', [outflow.clientOutflowId]);
+    } else if (changes.repeatsMonthly !== undefined) {
+      db.runSync("UPDATE money_outflows SET repeatsMonthly = ?, syncStatus = 'pending' WHERE clientOutflowId = ?", [
+        changes.repeatsMonthly ? 1 : 0,
+        outflow.clientOutflowId,
+      ]);
+    }
+    insertOutboxOperation({
+      operationId: uuidv4(),
+      userId,
+      companyId: outflow.companyId,
+      entityType: 'money_outflow',
+      entityLocalId: outflow.clientOutflowId,
+      operationType: changes.delete ? 'money_outflow.delete' : 'money_outflow.update',
+      payload: changes.delete
+        ? { clientOutflowId: outflow.clientOutflowId }
+        : { clientOutflowId: outflow.clientOutflowId, repeatsMonthly: !!changes.repeatsMonthly },
+    });
+  });
+}
+
+function saveGoalRow(goal) {
+  db.runSync(
+    `INSERT INTO savings_goals (clientGoalId, companyId, name, targetAmount, targetDate, isActive, createdAt, syncStatus, userId)
+     VALUES (?, ?, ?, ?, ?, 1, ?, 'pending', ?)`,
+    [goal.clientGoalId, goal.companyId, goal.name.trim(), goal.targetAmount || null, goal.targetDate || null, new Date().toISOString(), goal.userId]
+  );
+  insertOutboxOperation({
+    operationId: goal.clientGoalId,
+    userId: goal.userId,
+    companyId: goal.companyId,
+    entityType: 'savings_goal',
+    entityLocalId: goal.clientGoalId,
+    operationType: 'savings_goal.create',
+    payload: { clientGoalId: goal.clientGoalId, name: goal.name.trim(), targetAmount: goal.targetAmount || null, targetDate: goal.targetDate || null },
+  });
+}
+
+export function saveLocalSavingsGoal(goal) {
+  return runLocalTransaction(() => saveGoalRow(goal));
+}
+
+// Rename, change the target, or close (isActive: false) a goal.
+export function updateLocalSavingsGoal(goal, changes, userId) {
+  const next = { ...goal, ...changes };
+  return runLocalTransaction(() => {
+    db.runSync(
+      "UPDATE savings_goals SET name = ?, targetAmount = ?, targetDate = ?, isActive = ?, syncStatus = 'pending' WHERE clientGoalId = ?",
+      [next.name.trim(), next.targetAmount || null, next.targetDate || null, next.isActive === false || next.isActive === 0 ? 0 : 1, goal.clientGoalId]
+    );
+    insertOutboxOperation({
+      operationId: uuidv4(),
+      userId,
+      companyId: goal.companyId,
+      entityType: 'savings_goal',
+      entityLocalId: goal.clientGoalId,
+      operationType: 'savings_goal.update',
+      payload: { clientGoalId: goal.clientGoalId, ...changes },
+    });
+  });
+}
+
+// Feed changes. A row with unsynced local edits keeps them; the server copy that includes those
+// edits arrives after they're pushed.
+export function upsertPulledOutflow(o, userId, { deleted = false } = {}) {
+  if (hasPendingOperation(o.clientOutflowId)) return;
+  if (deleted || o.isDeleted) {
+    db.runSync('DELETE FROM money_outflows WHERE clientOutflowId = ?', [o.clientOutflowId]);
+    return;
+  }
+  db.runSync(
+    `INSERT INTO money_outflows
+       (clientOutflowId, id, companyId, kind, category, clientGoalId, amount, paymentMethod, note, repeatsMonthly,
+        occurredAt, syncStatus, userId, createdByUserId)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
+     ON CONFLICT(clientOutflowId) DO UPDATE SET
+       id = excluded.id, companyId = excluded.companyId, kind = excluded.kind, category = excluded.category,
+       clientGoalId = excluded.clientGoalId, amount = excluded.amount, paymentMethod = excluded.paymentMethod,
+       note = excluded.note, repeatsMonthly = excluded.repeatsMonthly, occurredAt = excluded.occurredAt,
+       syncStatus = 'synced', createdByUserId = excluded.createdByUserId`,
+    [o.clientOutflowId, o.id, o.companyId, o.kind, o.category ?? null, o.clientGoalId ?? null, Number(o.amount), o.paymentMethod,
+      o.note ?? null, o.repeatsMonthly ? 1 : 0, o.occurredAt, userId, o.userId ?? null]
+  );
+}
+
+export function upsertPulledSavingsGoal(g, userId) {
+  if (hasPendingOperation(g.clientGoalId)) return;
+  db.runSync(
+    `INSERT INTO savings_goals (clientGoalId, id, companyId, name, targetAmount, targetDate, isActive, createdAt, syncStatus, userId)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?)
+     ON CONFLICT(clientGoalId) DO UPDATE SET
+       id = excluded.id, companyId = excluded.companyId, name = excluded.name, targetAmount = excluded.targetAmount,
+       targetDate = excluded.targetDate, isActive = excluded.isActive, createdAt = excluded.createdAt, syncStatus = 'synced'`,
+    [g.clientGoalId, g.id, g.companyId, g.name, g.targetAmount === null || g.targetAmount === undefined ? null : Number(g.targetAmount),
+      g.targetDate ?? null, g.isActive === false ? 0 : 1, g.createdAt ?? null, userId]
+  );
+}
+
+export function getLocalOutflows(companyIds) {
+  if (!companyIds.length) return [];
+  const marks = companyIds.map(() => '?').join(',');
+  return db.getAllSync(`SELECT * FROM money_outflows WHERE companyId IN (${marks})`, companyIds);
+}
+
+export function getLocalSavingsGoals(companyIds) {
+  if (!companyIds.length) return [];
+  const marks = companyIds.map(() => '?').join(',');
+  return db.getAllSync(`SELECT * FROM savings_goals WHERE companyId IN (${marks})`, companyIds);
 }
 
 // --- Deferred item changes (see syncEngine pull) ---
