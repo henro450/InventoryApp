@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { View, StatusBar, AppState } from 'react-native';
-import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme, DarkTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -19,6 +19,8 @@ import { refreshSubscriptionReminders } from '../subscription/reminders';
 import { refreshStockWarnings } from '../notifications/stockWarnings';
 import InventoryScreen from '../screens/InventoryScreen';
 import AddItemScreen from '../screens/AddItemScreen';
+import AccountScreen from '../screens/AccountScreen';
+import TodayScreen from '../screens/TodayScreen';
 import StockTransactionScreen from '../screens/StockTransactionScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import ReportsScreen from '../screens/ReportsScreen';
@@ -42,7 +44,7 @@ import SplashView from '../components/SplashView';
 import TabBar from '../components/TabBar';
 import { startConnectivityWatcher, subscribeToSync } from '../sync/syncEngine';
 import { startScanToFind } from '../utils/scan';
-import { colors } from '../theme';
+import { colors, isDark } from '../theme';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -67,7 +69,11 @@ function openAlerts(isMainCompany) {
   else navigationRef.navigate('Home', { screen: 'Alerts' });
 }
 
-const navTheme = { ...DefaultTheme, colors: { ...DefaultTheme.colors, background: colors.ground, primary: colors.primary } };
+const baseTheme = isDark ? DarkTheme : DefaultTheme;
+const navTheme = {
+  ...baseTheme,
+  colors: { ...baseTheme.colors, background: colors.ground, card: colors.surface, text: colors.ink, border: colors.line, primary: colors.primary },
+};
 
 // The Scan tab never renders — the tab bar intercepts it and opens the scanner modal.
 function ScanPlaceholder() {
@@ -80,13 +86,14 @@ function HomeTabs() {
   const { user, isMainCompany, isCompanyAdmin } = useAuth();
   const tabBar = (props) => <TabBar {...props} onScan={() => startScanToFind(props.navigation, user.companyId)} />;
 
-  // Regular (non-admin) users: stock, their sales, plus who owes money.
+  // Regular (non-admin) users: their day so far, stock, their sales, plus who owes money.
   if (!isCompanyAdmin) {
     return (
       <Tab.Navigator screenOptions={{ headerShown: false }} tabBar={tabBar}>
+        <Tab.Screen name="Today" component={TodayScreen} />
         <Tab.Screen name="Inventory" component={InventoryScreen} />
-        <Tab.Screen name="Sales" component={SalesScreen} />
         <Tab.Screen name="Scan" component={ScanPlaceholder} />
+        <Tab.Screen name="Sales" component={SalesScreen} />
         <Tab.Screen name="Debtors" component={DebtorsScreen} initialParams={{ asTab: true }} />
       </Tab.Navigator>
     );
@@ -165,7 +172,7 @@ export default function RootNavigator() {
 
   return (
     <NavigationContainer ref={navigationRef} theme={navTheme} linking={linking}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.ground} />
       <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.ground } }}>
         {!user ? (
           <>
@@ -183,6 +190,7 @@ export default function RootNavigator() {
         ) : (
           <>
             <Stack.Screen name="Home" component={HomeTabs} />
+            <Stack.Screen name="Account" component={AccountScreen} />
             {isCompanyAdmin && <Stack.Screen name="AddItem" component={AddItemScreen} />}
             {isCompanyAdmin && <Stack.Screen name="CompanyUsers" component={CompanyUsersScreen} />}
             {isCompanyAdmin && <Stack.Screen name="Subscription" component={SubscriptionScreen} />}

@@ -6,7 +6,7 @@
     "version": "1.0.0",
     "scheme": "beams",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",

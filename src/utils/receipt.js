@@ -10,9 +10,13 @@ function methodsLine(byMethod) {
 }
 
 // A plain-text receipt (fits a WhatsApp message or SMS) for one sale from salesHistory().
-export function receiptText(sale, companyName) {
+// `company` is { name, phone, address } (the details set in Account and settings), or just a name.
+export function receiptText(sale, company) {
+  const { name, phone, address } = typeof company === 'string' ? { name: company } : company || {};
   const lines = [];
-  if (companyName) lines.push(companyName.toUpperCase());
+  if (name) lines.push(name.toUpperCase());
+  if (address) lines.push(address);
+  if (phone) lines.push(`Tel: ${formatPhone(phone)}`);
   lines.push(`Receipt #${receiptNumber(sale.key)}`);
   lines.push(formatDateTime(sale.occurredAt));
   lines.push('--------------------------------');
@@ -41,20 +45,20 @@ export function receiptText(sale, companyName) {
 }
 
 // Opens the phone's share sheet (WhatsApp, SMS, email, a printer app...).
-export function shareReceipt(sale, companyName) {
-  return Share.share({ message: receiptText(sale, companyName), title: `Receipt #${receiptNumber(sale.key)}` });
+export function shareReceipt(sale, company) {
+  return Share.share({ message: receiptText(sale, company), title: `Receipt #${receiptNumber(sale.key)}` });
 }
 
 // Straight to a WhatsApp chat with the customer (wa.me opens the app, or the browser if it isn't
 // installed). Nigerian numbers are sent as 234XXXXXXXXXX. Falls back to the share sheet.
-export async function whatsappReceipt(sale, companyName) {
+export async function whatsappReceipt(sale, company) {
   const digits = normalizePhone(sale.customerPhone);
   const international = digits.startsWith('0') && digits.length === 11 ? `234${digits.slice(1)}` : digits;
-  const url = `https://wa.me/${international}?text=${encodeURIComponent(receiptText(sale, companyName))}`;
+  const url = `https://wa.me/${international}?text=${encodeURIComponent(receiptText(sale, company))}`;
   try {
     await Linking.openURL(url);
   } catch {
-    await shareReceipt(sale, companyName);
+    await shareReceipt(sale, company);
   }
 }
 

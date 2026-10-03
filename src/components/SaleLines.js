@@ -1,7 +1,8 @@
 import React from 'react';
 import { View, Pressable, TextInput, StyleSheet } from 'react-native';
 import Icon from './Icon';
-import { Text, ListCard, LetterTile, IconButton, CountBadge, Chip } from './ui';
+import { Text, ListCard, IconButton, CountBadge, Chip } from './ui';
+import ItemThumb from './ItemThumb';
 import { formatMoney, formatNumber, cleanNumberInput, cleanQuantityInput, quantityStep, groupDigits } from '../utils/format';
 import { defaultSalePrice } from '../utils/sale';
 import { hasPacks, packLabel, packPrice, formatStock, unitOptions } from '../utils/pack';
@@ -71,7 +72,7 @@ function SaleLine({ line, calc, first, onChange, onRemove }) {
   return (
     <View style={[styles.line, !first && styles.lineBorder, calc.error && { backgroundColor: colors.dangerSoft }]}>
       <View style={styles.lineHead}>
-        <LetterTile label={item.name} size={38} />
+        <ItemThumb item={item} size={38} />
         <View style={{ flex: 1, gap: 2 }}>
           <Text style={styles.name} numberOfLines={2}>
             {item.name}

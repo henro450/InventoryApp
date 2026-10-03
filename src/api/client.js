@@ -103,6 +103,13 @@ export const api = {
     request(`/money-outflows/${encodeURIComponent(clientOutflowId)}/receipt`, { method: 'PUT', body: { dataBase64 }, timeoutMs: 60000 }),
 
   getMyCompany: () => request('/companies/mine'),
+  updateCompanyDetails: (payload) => request('/companies/mine', { method: 'PATCH', body: payload }),
+  uploadCompanyLogo: (dataBase64) => request('/companies/mine/logo', { method: 'PUT', body: { dataBase64 }, timeoutMs: 60000 }),
+  deleteCompanyLogo: () => request('/companies/mine/logo', { method: 'DELETE' }),
+  changePassword: (currentPassword, newPassword) => request('/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } }),
+  updateProfile: (name) => request('/auth/me', { method: 'PATCH', body: { name } }),
+  uploadItemPhoto: (itemId, dataBase64) => request(`/items/${itemId}/photo`, { method: 'PUT', body: { dataBase64 }, timeoutMs: 60000 }),
+  deleteItemPhoto: (itemId) => request(`/items/${itemId}/photo`, { method: 'DELETE' }),
   getMe: () => request('/auth/me'),
 
   // Company admins: users of their own company.

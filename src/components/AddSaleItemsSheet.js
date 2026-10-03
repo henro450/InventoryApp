@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, Modal, Pressable, FlatList, StyleSheet, KeyboardAvoidingView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from './Icon';
-import { Text, SearchField, IconButton, LetterTile, Pill, Button, InlineEmpty } from './ui';
+import { Text, SearchField, IconButton, Pill, Button, InlineEmpty } from './ui';
+import ItemThumb from './ItemThumb';
 import { formatMoney, formatNumber } from '../utils/format';
 import { isLowStock } from '../utils/inventory';
 import { defaultSalePrice } from '../utils/sale';
@@ -86,7 +87,7 @@ function PickerRow({ item, selected, onPress }) {
     >
       <View style={[styles.check, selected && styles.checkOn]}>{selected ? <Icon name="check" size={16} color="#FFFFFF" strokeWidth={2.6} /> : null}</View>
       <View style={{ opacity: out ? 0.5 : 1 }}>
-        <LetterTile label={item.name} size={38} />
+        <ItemThumb item={item} size={38} />
       </View>
       <View style={{ flex: 1, gap: 2, opacity: out ? 0.5 : 1 }}>
         <Text style={styles.name} numberOfLines={1}>

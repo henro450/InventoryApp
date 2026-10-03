@@ -252,7 +252,7 @@ const styles = StyleSheet.create({
   newPrice: { fontFamily: fonts.semibold, fontSize: 16, fontVariant: ['tabular-nums'] },
   threshold: {
     flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingLeft: 16, paddingRight: 8,
-    borderRadius: 18, borderWidth: 1, borderStyle: 'dashed', borderColor: '#CFCBC1',
+    borderRadius: 18, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.dashed,
   },
   thresholdInputBox: {
     height: 44, width: 76, borderRadius: 12, borderWidth: 1, borderColor: colors.lineStrong, backgroundColor: colors.surface,

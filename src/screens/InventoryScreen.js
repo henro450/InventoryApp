@@ -11,8 +11,10 @@ import { isLowStock } from '../utils/inventory';
 import { exportCsv, pickAndParseCsv } from '../utils/csvExport';
 import { startScanToFind } from '../utils/scan';
 import { hasPacks, formatStock } from '../utils/pack';
-import { formatNumber, formatTime, lastSyncedLabel, plural, timeAgo } from '../utils/format';
+import { formatMoney, formatNumber, formatTime, lastSyncedLabel, plural, timeAgo } from '../utils/format';
 import Icon from '../components/Icon';
+import ItemThumb from '../components/ItemThumb';
+import { getPref, setPref } from '../theme/scheme';
 import {
   Text, Screen, LargeHeader, NavHeader, IconButton, AccountButton, SearchField, Chip, Pill, Banner, EmptyState,
   CompanySwitcher, ReadOnlyBanner, Button,
@@ -45,6 +47,39 @@ function sellingPriceFromCsv(value) {
   return text !== '' && Number.isFinite(price) && price >= 0 ? price : null;
 }
 
+const SORTS = [
+  { key: 'name', label: 'Name' },
+  { key: 'stock', label: 'Lowest stock first' },
+  { key: 'value', label: 'Highest value first' },
+  { key: 'category', label: 'Group by category' },
+];
+
+// What the stock on hand cost, at the last purchase price (0 when it was never bought in).
+function stockValue(item) {
+  return Math.max(0, Number(item.quantityOnHand) || 0) * (Number(item.lastPurchasePrice) || 0);
+}
+
+const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+
+// Sorted items, with a heading row before each category when grouping.
+function arrange(items, sort) {
+  if (sort === 'stock') return [...items].sort((a, b) => Number(a.quantityOnHand) - Number(b.quantityOnHand) || byName(a, b));
+  if (sort === 'value') return [...items].sort((a, b) => stockValue(b) - stockValue(a) || byName(a, b));
+  if (sort !== 'category') return items;
+  const groups = new Map();
+  for (const item of items) {
+    const name = (item.category || '').trim() || 'Uncategorized';
+    const key = name.toLowerCase();
+    if (!groups.has(key)) groups.set(key, { name, items: [] });
+    groups.get(key).items.push(item);
+  }
+  const ordered = [...groups.entries()].sort(([a], [b]) => (a === 'uncategorized') - (b === 'uncategorized') || a.localeCompare(b));
+  return ordered.flatMap(([key, g]) => [
+    { heading: true, localId: `heading:${key}`, title: g.name, count: g.items.length, value: g.items.reduce((sum, i) => sum + stockValue(i), 0) },
+    ...g.items,
+  ]);
+}
+
 // SYNC-06: visible "All synced" / "X pending" indicator so the user always knows whether
 // their data has reached the cloud. The same screen doubles as the Main Company's read-only
 // view of a Sub Company when opened with route.params.companyId.
@@ -59,6 +94,23 @@ export default function InventoryScreen({ navigation, route }) {
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
+  // Remembered on this phone.
+  const [sort, setSortState] = useState(() => {
+    const saved = getPref('inventorySort', 'name');
+    return SORTS.some((o) => o.key === saved) ? saved : 'name';
+  });
+
+  function setSort(value) {
+    setSortState(value);
+    setPref('inventorySort', value);
+  }
+
+  function chooseSort() {
+    Alert.alert('Sort items', undefined, [
+      ...SORTS.map((o) => ({ text: o.key === sort ? `${o.label} ✓` : o.label, onPress: () => setSort(o.key) })),
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }
 
   const loadLocal = useCallback(() => {
     const pendingIds = getItemIdsWithPendingWork(user.id);
@@ -176,13 +228,15 @@ export default function InventoryScreen({ navigation, route }) {
 
   const visibleItems = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return items.filter((i) => {
+    const matching = items.filter((i) => {
       if (filter === 'low' && !isLowStock(i)) return false;
       if (filter === 'review' && i.syncStatus !== 'conflict') return false;
       if (!q) return true;
       return i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q) || (i.category || '').toLowerCase().includes(q);
     });
-  }, [items, filter, query]);
+    return arrange(matching, sort);
+  }, [items, filter, query, sort]);
+  const sortLabel = SORTS.find((o) => o.key === sort)?.label;
 
   const lastSynced = getLastSyncedAt(user.id);
   const companyParams = { companyId: viewingCompanyId, companyName: route?.params?.companyName };
@@ -258,6 +312,16 @@ export default function InventoryScreen({ navigation, route }) {
         {isOwnCompany && reviewCount > 0 && (
           <Chip label="Needs review" count={reviewCount} active={filter === 'review'} onPress={() => setFilter('review')} />
         )}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Sort: ${sortLabel}. Change sort`}
+          onPress={chooseSort}
+          hitSlop={6}
+          style={({ pressed }) => [styles.sortButton, pressed && { opacity: 0.7 }]}
+        >
+          <Icon name="filter" size={15} color={colors.ink2} strokeWidth={2} />
+          <Text style={styles.sortText} numberOfLines={1}>{sortLabel}</Text>
+        </Pressable>
       </View>
       {isOwnCompany &&
         (syncSummary.total > 0 ? (
@@ -303,9 +367,15 @@ export default function InventoryScreen({ navigation, route }) {
             <EmptyState icon="search" title="Nothing matches" body="Try a different search or filter." />
           )
         }
-        renderItem={({ item }) => (
+        renderItem={({ item }) => item.heading ? (
+          <View style={styles.groupHeading} accessibilityRole="header">
+            <Text style={styles.groupTitle} numberOfLines={1}>{item.title}</Text>
+            <Text style={type.caption}>{plural(item.count, 'item')}{canManageItems && item.value > 0 ? ` · ${formatMoney(item.value)}` : ''}</Text>
+          </View>
+        ) : (
           <ItemRow
             item={item}
+            showValue={sort === 'value' && canManageItems}
             editable={isOwnCompany}
             canManage={canManageItems}
             onPress={() => navigation.navigate('StockTransaction', { item })}
@@ -329,7 +399,7 @@ export default function InventoryScreen({ navigation, route }) {
   );
 }
 
-function ItemRow({ item, editable, canManage, onPress, onEdit, onDeactivate, onMore }) {
+function ItemRow({ item, showValue, editable, canManage, onPress, onEdit, onDeactivate, onMore }) {
   const swipeRef = useRef(null);
   const low = isLowStock(item);
   const conflict = item.syncStatus === 'conflict';
@@ -344,6 +414,7 @@ function ItemRow({ item, editable, canManage, onPress, onEdit, onDeactivate, onM
       onPress={onPress}
       style={({ pressed }) => [styles.card, conflict && { borderColor: colors.warnLine }, pressed && { backgroundColor: colors.surfaceMuted }]}
     >
+      <ItemThumb item={item} size={44} />
       <View style={{ flex: 1, gap: 5 }}>
         <Text style={styles.itemName} numberOfLines={2}>
           {item.name}
@@ -375,6 +446,7 @@ function ItemRow({ item, editable, canManage, onPress, onEdit, onDeactivate, onM
             {formatStock(item.quantityOnHand, item)}
           </Text>
         )}
+        {showValue && <Text style={type.caption} numberOfLines={1}>{formatMoney(stockValue(item))}</Text>}
       </View>
       {canManage && <IconButton icon="more" label={`More actions for ${item.name}`} variant="ghost" size={36} onPress={onMore} />}
     </Pressable>
@@ -394,7 +466,7 @@ function ItemRow({ item, editable, canManage, onPress, onEdit, onDeactivate, onM
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Edit ${item.name}`}
-            style={[styles.swipeAction, { backgroundColor: colors.ink }]}
+            style={[styles.swipeAction, { backgroundColor: colors.inkBg }]}
             onPress={() => {
               swipeRef.current?.close();
               onEdit();
@@ -406,7 +478,7 @@ function ItemRow({ item, editable, canManage, onPress, onEdit, onDeactivate, onM
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Deactivate ${item.name}`}
-            style={[styles.swipeAction, { backgroundColor: colors.danger, width: 96 }]}
+            style={[styles.swipeAction, { backgroundColor: colors.dangerFill, width: 96 }]}
             onPress={() => {
               swipeRef.current?.close();
               onDeactivate();
@@ -427,8 +499,12 @@ const styles = StyleSheet.create({
   readOnlyWrap: { paddingHorizontal: 20, paddingTop: 2, gap: 14 },
   listHeader: { gap: 14, paddingBottom: 14 },
   searchRow: { flexDirection: 'row', gap: 10 },
-  scanButton: { width: 48, height: 48, borderRadius: 14, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
-  chips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  scanButton: { width: 48, height: 48, borderRadius: 14, backgroundColor: colors.inkBg, alignItems: 'center', justifyContent: 'center' },
+  chips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', alignItems: 'center' },
+  sortButton: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, paddingHorizontal: 4, maxWidth: 190 },
+  sortText: { fontFamily: fonts.medium, fontSize: 13, color: colors.ink2 },
+  groupHeading: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, paddingTop: 8, paddingHorizontal: 4 },
+  groupTitle: { flex: 1, fontFamily: fonts.semibold, fontSize: 13, color: colors.ink2, textTransform: 'uppercase', letterSpacing: 0.6 },
   list: { paddingHorizontal: 20, paddingTop: 2, paddingBottom: 32 },
   card: {
     backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 18,
@@ -442,10 +518,10 @@ const styles = StyleSheet.create({
   swipeContainer: { borderRadius: 18 },
   swipeActions: { flexDirection: 'row', marginLeft: 10, borderRadius: 18, overflow: 'hidden' },
   swipeAction: { width: 80, alignItems: 'center', justifyContent: 'center', gap: 4 },
-  swipeText: { color: '#FFFFFF', fontFamily: fonts.semibold, fontSize: 12 },
+  swipeText: { color: colors.onInk, fontFamily: fonts.semibold, fontSize: 12 },
   fab: {
     position: 'absolute', right: 20, bottom: 18, height: 54, paddingLeft: 16, paddingRight: 20, borderRadius: 27,
     backgroundColor: colors.primary, flexDirection: 'row', alignItems: 'center', gap: 8, ...shadow.primary,
   },
-  fabText: { color: '#FFFFFF', fontFamily: fonts.semibold, fontSize: 15 },
+  fabText: { color: colors.onInk, fontFamily: fonts.semibold, fontSize: 15 },
 });

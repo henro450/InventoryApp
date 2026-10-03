@@ -13,6 +13,7 @@ import { ROLES } from '../constants/roles';
 import * as math from './reportMath';
 import * as outflowMath from './outflowMath';
 import { salesHistory } from './salesMath';
+import { todaySummary } from './todayMath';
 
 // Reports computed from the device's SQLite data — synced history plus this device's unsynced
 // changes — so they work offline and always include work not yet pushed. Each function returns
@@ -147,4 +148,18 @@ export function getRecentCategories(companyId, perKind = 6) {
     if (list.length < perKind && !list.some((c) => c.toLowerCase() === category.toLowerCase())) list.push(category);
   }
   return byKind;
+}
+
+// One person's day so far (the staff Today tab).
+export function getToday(user) {
+  const companyIds = [user.companyId];
+  const { allItems, transactions, payments } = load(companyIds);
+  return todaySummary({
+    sales: salesHistory(allItems, transactions, user.companyId),
+    transactions,
+    debtPayments: payments,
+    supplierPayments: getLocalSupplierPayments(companyIds),
+    outflows: getLocalOutflows(companyIds),
+    userId: user.id,
+  });
 }

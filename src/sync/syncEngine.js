@@ -21,8 +21,10 @@ import {
   deferItemChange,
   getDeferredChanges,
   removeDeferredChange,
+  setLocalItemPhotoMeta,
 } from '../db/localDb';
 import { uploadPendingReceipts } from '../utils/receiptPhotos';
+import { uploadPendingItemPhotos } from '../utils/itemPhotos';
 
 let syncInProgress = false;
 
@@ -75,6 +77,7 @@ function applyItemChange(operation, item, userId) {
     userId,
     isActive: operation === 'delete' ? false : item.isActive,
   });
+  setLocalItemPhotoMeta(itemLocalId(item), item);
 }
 
 // The feed carries companies, items, stock transactions (including transfers between branches),
@@ -161,6 +164,8 @@ export async function runSync(userId) {
 
     // Receipt photos go up once their money-out entry is on the server.
     operationsSynced += await uploadPendingReceipts(userId);
+    // Item photos likewise, once the item is on the server.
+    operationsSynced += await uploadPendingItemPhotos();
 
     let cursor = getSyncCursor(userId);
     let pulledChanges = 0;

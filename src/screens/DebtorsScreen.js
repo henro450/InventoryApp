@@ -174,9 +174,9 @@ export default function DebtorsScreen({ navigation, route }) {
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingBottom: 32 },
-  hero: { backgroundColor: colors.ink, borderRadius: 20, padding: 18, gap: 6 },
+  hero: { backgroundColor: colors.inkBg, borderRadius: 20, padding: 18, gap: 6 },
   heroLabel: { fontFamily: fonts.medium, fontSize: 13, color: colors.onDarkMuted },
-  heroValue: { fontFamily: fonts.display, fontSize: 36, lineHeight: 40, letterSpacing: -1, color: '#FFFFFF' },
+  heroValue: { fontFamily: fonts.display, fontSize: 36, lineHeight: 40, letterSpacing: -1, color: colors.onInk },
   heroSub: { fontSize: 13, color: colors.onDarkMuted },
   chips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   row: {

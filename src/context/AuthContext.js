@@ -171,6 +171,21 @@ export function AuthProvider({ children }) {
     ]);
   }
 
+  // After a password change the server has already turned fingerprint login off for every phone;
+  // forget it here too, without asking.
+  async function forgetFingerprint() {
+    await turnOffStoredFingerprint().catch(() => {});
+    setFingerprintEnabled(false);
+  }
+
+  // Applies changes saved through the API (name, company details) to the signed-in user straight away.
+  async function updateUser(changes) {
+    if (!user) return;
+    const updated = { ...user, ...changes, company: changes.company ? { ...user.company, ...changes.company } : user.company };
+    await SecureStore.setItemAsync('cachedUser', JSON.stringify(updated));
+    setUser((u) => (u && u.id === updated.id ? updated : u));
+  }
+
   async function performLogout() {
     justLoggedOut.current = true;
     clearSubscriptionReminders();
@@ -219,6 +234,7 @@ export function AuthProvider({ children }) {
       value={{
         user, loading, login, loginWithFingerprint, logout, isMainCompany, isSuperAdmin, isCompanyAdmin, allowSubCompanies,
         fingerprintEnabled, turnOffFingerprint, shouldAutoPromptFingerprint, subscriptionBlocked, refreshUser,
+        enableFingerprint: () => enableFingerprint(user), forgetFingerprint, updateUser,
       }}
     >
       {children}
