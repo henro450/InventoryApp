@@ -133,7 +133,7 @@ export default function SavingsScreen() {
             <View style={styles.heroButtons}>
               <Pressable accessibilityRole="button" onPress={() => setAdding({ kind: 'savings' })} style={({ pressed }) => [styles.heroBtn, styles.heroBtnPrimary, pressed && { opacity: 0.85 }]}>
                 <Icon name="plus" size={17} color="#FFFFFF" strokeWidth={2.2} />
-                <Text style={[styles.heroBtnText, { color: '#FFFFFF' }]}>Add money</Text>
+                <Text style={[styles.heroBtnText, { color: colors.onInk }]}>Add money</Text>
               </Pressable>
               <Pressable
                 accessibilityRole="button"
@@ -240,19 +240,19 @@ export default function SavingsScreen() {
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingBottom: 32, gap: 14 },
-  hero: { backgroundColor: colors.okSoft, borderWidth: 1, borderColor: '#BFE0CC', borderRadius: 22, padding: 18, gap: 4 },
+  hero: { backgroundColor: colors.okSoft, borderWidth: 1, borderColor: colors.okLine, borderRadius: 22, padding: 18, gap: 4 },
   heroLabel: { fontFamily: fonts.medium, fontSize: 13, color: colors.ok },
-  heroValue: { fontFamily: fonts.display, fontSize: 34, letterSpacing: -0.8, color: '#0F5434', fontVariant: ['tabular-nums'] },
-  heroSub: { fontSize: 13, color: '#2F6B4C' },
+  heroValue: { fontFamily: fonts.display, fontSize: 34, letterSpacing: -0.8, color: colors.okInk, fontVariant: ['tabular-nums'] },
+  heroSub: { fontSize: 13, color: colors.okSub },
   heroButtons: { flexDirection: 'row', gap: 10, marginTop: 12 },
   heroBtn: { flex: 1, height: 46, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  heroBtnPrimary: { backgroundColor: colors.ok },
-  heroBtnSecondary: { backgroundColor: colors.surface, borderWidth: 1, borderColor: '#BFE0CC' },
+  heroBtnPrimary: { backgroundColor: colors.okFill },
+  heroBtnSecondary: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.okLine },
   heroBtnText: { fontFamily: fonts.semibold, fontSize: 14 },
   goalTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   goalName: { fontFamily: fonts.semibold, fontSize: 15.5 },
   goalValue: { fontFamily: fonts.display, fontSize: 20, color: colors.ok, fontVariant: ['tabular-nums'] },
   track: { height: 8, borderRadius: 4, backgroundColor: colors.track, overflow: 'hidden' },
-  fill: { height: 8, borderRadius: 4, backgroundColor: colors.ok },
+  fill: { height: 8, borderRadius: 4, backgroundColor: colors.okFill },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
 });

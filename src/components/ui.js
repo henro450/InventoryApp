@@ -15,7 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Icon from './Icon';
-import { colors, fonts, radius, type, shadow } from '../theme';
+import { colors, fonts, radius, type, shadow, isDark } from '../theme';
 import { initials, dateToYmd, ymdToDate, formatYmd, cleanNumberInput, cleanQuantityInput, groupDigits } from '../utils/format';
 
 const NUMBER_KEYBOARDS = new Set(['decimal-pad', 'number-pad', 'numeric']);
@@ -55,7 +55,7 @@ export function LargeHeader({ eyebrow, title, right }) {
 export function NavHeader({ title, right, onBack, dark = false, showBack = true }) {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const fg = dark ? '#FFFFFF' : colors.ink;
+  const fg = dark ? colors.onInk : colors.ink;
   return (
     <View style={[styles.navHeader, { paddingTop: insets.top + 6 }]}>
       <View style={styles.navSide}>
@@ -86,8 +86,8 @@ export function IconButton({ icon, label, onPress, variant = 'surface', size = 4
     muted: { bg: colors.ground, fg: colors.ink, border: colors.ground },
     outline: { bg: colors.surface, fg: colors.ink, border: colors.lineStrong },
     soft: { bg: colors.primarySoft, fg: colors.primary, border: colors.primarySoft },
-    dark: { bg: colors.ink, fg: '#FFFFFF', border: colors.ink },
-    onDark: { bg: 'rgba(255,255,255,0.14)', fg: '#FFFFFF', border: 'transparent' },
+    dark: { bg: colors.inkBg, fg: colors.onInk, border: colors.inkBg },
+    onDark: { bg: 'rgba(255,255,255,0.14)', fg: colors.onInk, border: 'transparent' },
   }[variant];
   return (
     <Pressable
@@ -141,6 +141,7 @@ export function AccountButton({ user, onLogout }) {
         <Text style={styles.avatarText}>{initials(user?.name)}</Text>
       </Pressable>
       <Sheet visible={open} onClose={() => setOpen(false)} title={user?.name || 'Account'} description={user?.email || undefined}>
+        {!isSuperAdmin && <Button title="Account and settings" variant="secondary" icon="user" height={48} onPress={() => go('Account')} />}
         {!isSuperAdmin && (
           <Button
             title={isCompanyAdmin ? 'Money out' : 'Expenses'}
@@ -158,6 +159,7 @@ export function AccountButton({ user, onLogout }) {
             <Button title="Manage users" variant="secondary" icon="user" height={48} onPress={() => go('CompanyUsers')} />
           </View>
         )}
+        {isSuperAdmin && <Button title="App errors" variant="secondary" icon="alert" height={48} onPress={() => go('AdminErrors')} />}
         {fingerprintEnabled && (
           <Button
             title="Turn off fingerprint login"
@@ -180,10 +182,10 @@ export function AccountButton({ user, onLogout }) {
 }
 
 const BUTTON_VARIANTS = {
-  primary: { bg: colors.primary, fg: '#FFFFFF', border: colors.primary },
-  dark: { bg: colors.ink, fg: '#FFFFFF', border: colors.ink },
+  primary: { bg: colors.primary, fg: colors.onInk, border: colors.primary },
+  dark: { bg: colors.inkBg, fg: colors.onInk, border: colors.inkBg },
   secondary: { bg: colors.surface, fg: colors.ink, border: colors.lineStrong },
-  danger: { bg: colors.surface, fg: colors.danger, border: '#EBC5C0' },
+  danger: { bg: colors.surface, fg: colors.danger, border: colors.dangerBorder },
   ghost: { bg: 'transparent', fg: colors.primary, border: 'transparent' },
 };
 
@@ -249,6 +251,7 @@ export const Field = React.forwardRef(function Field(
         {leadingIcon ? <Icon name={leadingIcon} size={20} color={colors.ink3} /> : null}
         {prefix ? <Text style={styles.prefix}>{prefix}</Text> : null}
         <TextInput
+          keyboardAppearance={isDark ? 'dark' : 'light'}
           ref={ref}
           placeholderTextColor={colors.placeholder}
           accessibilityLabel={inputProps.accessibilityLabel || label}
@@ -336,7 +339,7 @@ export function DateField({ label, value, onChange, placeholder = 'Choose date',
             </>
           }
         >
-          <DateTimePicker value={iosDate} mode="date" display="inline" {...limits} onChange={(e, date) => date && setIosDate(date)} />
+          <DateTimePicker value={iosDate} mode="date" display="inline" themeVariant={isDark ? 'dark' : 'light'} {...limits} onChange={(e, date) => date && setIosDate(date)} />
         </Sheet>
       )}
     </View>
@@ -348,6 +351,7 @@ export function SearchField({ value, onChangeText, placeholder }) {
     <View style={styles.search}>
       <Icon name="search" size={20} color={colors.ink3} />
       <TextInput
+        keyboardAppearance={isDark ? 'dark' : 'light'}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
@@ -375,12 +379,12 @@ export function Chip({ label, count, active = false, icon, onPress, onClear }) {
       onPress={onPress}
       style={({ pressed }) => [styles.chip, active && styles.chipActive, pressed && { opacity: 0.75 }]}
     >
-      {icon ? <Icon name={icon} size={16} color={active ? '#FFFFFF' : colors.ink2} strokeWidth={2} /> : null}
-      <Text style={[styles.chipText, active && { color: '#FFFFFF' }]}>{label}</Text>
-      {count != null ? <Text style={[styles.chipCount, active && { color: '#C3C7D2' }]}>{count}</Text> : null}
+      {icon ? <Icon name={icon} size={16} color={active ? colors.onInk : colors.ink2} strokeWidth={2} /> : null}
+      <Text style={[styles.chipText, active && { color: colors.onInk }]}>{label}</Text>
+      {count != null ? <Text style={[styles.chipCount, active && { color: colors.onInkFaint }]}>{count}</Text> : null}
       {onClear ? (
         <Pressable accessibilityRole="button" accessibilityLabel={`Clear ${label}`} onPress={onClear} hitSlop={8}>
-          <Icon name="x" size={14} color={active ? '#FFFFFF' : colors.ink2} strokeWidth={2.2} />
+          <Icon name="x" size={14} color={active ? colors.onInk : colors.ink2} strokeWidth={2.2} />
         </Pressable>
       ) : null}
     </Pressable>
@@ -470,8 +474,8 @@ export function Segmented({ options, value, onChange, accessibilityLabel }) {
 
 export function LetterTile({ label, muted = false, size = 40 }) {
   return (
-    <View style={[styles.tile, { width: size, height: size, backgroundColor: muted ? '#F1F0EC' : colors.muted }]}>
-      <Text style={[styles.tileText, muted && { color: '#8C909A' }]}>{String(label || '?').trim().charAt(0).toUpperCase()}</Text>
+    <View style={[styles.tile, { width: size, height: size, backgroundColor: muted ? colors.tileMuted : colors.muted }]}>
+      <Text style={[styles.tileText, muted && { color: colors.tileMutedInk }]}>{String(label || '?').trim().charAt(0).toUpperCase()}</Text>
     </View>
   );
 }
@@ -506,6 +510,7 @@ export function Stepper({ value, onChange, label, big = false, focusedRing = fal
       <View style={[styles.stepper, big && styles.stepperBig, focusedRing && styles.inputBoxFocused]}>
         <IconButton icon="minus" label={`Decrease ${label || 'value'}`} variant="muted" size={btnSize} onPress={() => step(-stepBy)} disabled={num <= 0} />
         <TextInput
+          keyboardAppearance={isDark ? 'dark' : 'light'}
           value={groupDigits(cleanQuantityInput(value, decimal))}
           onChangeText={(t) => onChange(cleanQuantityInput(t, decimal))}
           keyboardType={decimal ? 'decimal-pad' : 'number-pad'}
@@ -626,7 +631,7 @@ export function BarRow({ name, you = false, value, max, label, danger = false })
         <Text style={[styles.barValue, danger && { color: colors.danger }]}>{label}</Text>
       </View>
       <View style={styles.barTrack}>
-        <View style={[styles.barFill, { width: `${pct * 100}%`, backgroundColor: you ? colors.ink : colors.primary }]} />
+        <View style={[styles.barFill, { width: `${pct * 100}%`, backgroundColor: you ? colors.inkBg : colors.primary }]} />
       </View>
     </View>
   );
@@ -694,10 +699,10 @@ const styles = StyleSheet.create({
   iconButton: { alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
   dot: {
     position: 'absolute', top: 9, right: 10, width: 10, height: 10, borderRadius: 5,
-    backgroundColor: colors.danger, borderWidth: 2, borderColor: colors.surface,
+    backgroundColor: colors.dangerFill, borderWidth: 2, borderColor: colors.surface,
   },
   avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: '#FFFFFF', fontFamily: fonts.semibold, fontSize: 14, letterSpacing: 0.3 },
+  avatarText: { color: colors.onInk, fontFamily: fonts.semibold, fontSize: 14, letterSpacing: 0.3 },
   button: {
     borderRadius: radius.lg, borderWidth: 1, paddingHorizontal: 18,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
@@ -724,7 +729,7 @@ const styles = StyleSheet.create({
     height: 38, paddingHorizontal: 14, borderRadius: 19, borderWidth: 1, borderColor: colors.line,
     backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: 6,
   },
-  chipActive: { backgroundColor: colors.ink, borderColor: colors.ink },
+  chipActive: { backgroundColor: colors.inkBg, borderColor: colors.inkBg },
   chipText: { fontFamily: fonts.semibold, fontSize: 13, color: colors.ink2 },
   chipCount: { fontFamily: fonts.medium, fontSize: 13, color: colors.ink3 },
   pill: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 26, paddingHorizontal: 10, borderRadius: 13, alignSelf: 'flex-start' },
@@ -740,7 +745,7 @@ const styles = StyleSheet.create({
   segmented: { flexDirection: 'row', padding: 4, borderRadius: radius.lg, backgroundColor: colors.segment, gap: 2 },
   segment: { flex: 1, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
   segmentActive: {
-    backgroundColor: colors.surface, shadowColor: '#15171C', shadowOpacity: 0.1, shadowRadius: 3,
+    backgroundColor: colors.surface, shadowColor: '#000000', shadowOpacity: 0.1, shadowRadius: 3,
     shadowOffset: { width: 0, height: 1 }, elevation: 1,
   },
   segmentText: { fontFamily: fonts.semibold, fontSize: 13, color: colors.ink2 },

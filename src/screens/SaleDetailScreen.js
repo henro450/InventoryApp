@@ -35,7 +35,8 @@ export default function SaleDetailScreen({ route, navigation }) {
 
   useLocalRefresh(() => setSale(getSales(user.companyId).find((s) => s.key === saleKey) || null));
 
-  const companyName = user.company?.name;
+  // Name, phone and address for the receipt header (kept current by Account and settings).
+  const company = user.company;
   const canReturn = isCompanyAdmin && sale && sale.lines.some((l) => l.remainingQty > 0);
 
   if (sale === undefined) {
@@ -123,9 +124,9 @@ export default function SaleDetailScreen({ route, navigation }) {
         )}
 
         <View style={{ gap: 10 }}>
-          <Button title="Share receipt" icon="share" variant="secondary" onPress={() => shareReceipt(sale, companyName)} />
+          <Button title="Share receipt" icon="share" variant="secondary" onPress={() => shareReceipt(sale, company)} />
           {sale.customerPhone ? (
-            <Button title="Send receipt on WhatsApp" icon="phone" variant="secondary" onPress={() => whatsappReceipt(sale, companyName)} />
+            <Button title="Send receipt on WhatsApp" icon="phone" variant="secondary" onPress={() => whatsappReceipt(sale, company)} />
           ) : null}
         </View>
 

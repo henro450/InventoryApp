@@ -148,6 +148,7 @@ export function initLocalDb() {
     );
 
     CREATE INDEX IF NOT EXISTS money_outflows_company_idx ON money_outflows (companyId, occurredAt);
+    CREATE INDEX IF NOT EXISTS stock_transactions_company_time_idx ON stock_transactions (companyId, occurredAt);
 
     CREATE TABLE IF NOT EXISTS savings_goals (
       clientGoalId TEXT PRIMARY KEY,
@@ -213,6 +214,17 @@ export function initLocalDb() {
   tryAddColumn('money_outflows', 'receiptMimeType TEXT');
   tryAddColumn('money_outflows', 'receiptUri TEXT');
   tryAddColumn('money_outflows', 'receiptPending INTEGER DEFAULT 0');
+  // Item photos: the server's marker (type and when it changed), a photo picked on this phone,
+  // and what still has to reach the server (1 = upload photoUri, 2 = remove the photo).
+  tryAddColumn('items', 'photoMimeType TEXT');
+  tryAddColumn('items', 'photoUpdatedAt TEXT');
+  tryAddColumn('items', 'photoUri TEXT');
+  tryAddColumn('items', 'photoPending INTEGER DEFAULT 0');
+  // Company details shown on receipts and the account screen.
+  tryAddColumn('companies', 'phone TEXT');
+  tryAddColumn('companies', 'address TEXT');
+  tryAddColumn('companies', 'logoMimeType TEXT');
+  tryAddColumn('companies', 'logoUpdatedAt TEXT');
   db.execSync(`
     CREATE INDEX IF NOT EXISTS stock_transactions_company_idx ON stock_transactions (companyId, type, occurredAt);
     CREATE INDEX IF NOT EXISTS stock_transactions_item_idx ON stock_transactions (itemLocalId);
@@ -225,7 +237,7 @@ export function initLocalDb() {
 // cursor past company/transaction changes without storing them, so rewind every cursor to
 // download the full feed once. Item upserts are idempotent and items with pending local
 // work are still protected, so replaying the feed is safe.
-const LOCAL_SCHEMA_VERSION = 5; // 5: keeps supplier, expiry, transfer and pack fields
+const LOCAL_SCHEMA_VERSION = 6; // 6: keeps item photo and company detail fields
 function resyncIfSchemaChanged() {
   const row = db.getFirstSync("SELECT value FROM sync_meta WHERE key = 'schemaVersion'");
   if (Number(row?.value || 1) >= LOCAL_SCHEMA_VERSION) return;
@@ -329,6 +341,43 @@ export function upsertLocalItem(item) {
       Number(item.packSize) > 1 ? item.packName || 'pack' : null,
     ]
   );
+}
+
+// The server's photo marker for an item, from the change feed or an upload response. A photo
+// still waiting to upload from this phone is left alone.
+export function setLocalItemPhotoMeta(localId, { photoMimeType, photoUpdatedAt, version }) {
+  db.runSync(
+    `UPDATE items SET photoMimeType = ?, photoUpdatedAt = ?, version = COALESCE(?, version),
+       photoUri = CASE WHEN photoUpdatedAt IS ? THEN photoUri ELSE NULL END
+     WHERE localId = ? AND photoPending = 0`,
+    [photoMimeType ?? null, photoUpdatedAt ?? null, version ?? null, photoUpdatedAt ?? null, localId]
+  );
+}
+
+// A photo picked on this phone (already copied into the app's files), or null to remove it.
+// Shown straight away and sent to the server on the next sync once the item itself has synced.
+export function setLocalItemPhoto(localId, photoUri) {
+  db.runSync('UPDATE items SET photoUri = ?, photoPending = ? WHERE localId = ?', [photoUri, photoUri ? 1 : 2, localId]);
+}
+
+// Items whose photo change still has to reach the server (only items the server already has).
+// Only this phone's admin sets a photo, so every pending one belongs to the signed-in company.
+export function getPendingItemPhotos() {
+  return db.getAllSync('SELECT localId, id, photoUri, photoPending FROM items WHERE photoPending > 0 AND id IS NOT NULL');
+}
+
+export function markItemPhotoSynced(localId, serverItem) {
+  db.runSync(
+    `UPDATE items SET photoPending = 0, photoMimeType = ?, photoUpdatedAt = ?, version = COALESCE(?, version),
+       photoUri = CASE WHEN ? IS NULL THEN NULL ELSE photoUri END
+     WHERE localId = ?`,
+    [serverItem?.photoMimeType ?? null, serverItem?.photoUpdatedAt ?? null, serverItem?.version ?? null, serverItem?.photoMimeType ?? null, localId]
+  );
+}
+
+// A photo the server will never take (too big, not an image): give up on it.
+export function dropPendingItemPhoto(localId) {
+  db.runSync('UPDATE items SET photoPending = 0, photoUri = NULL WHERE localId = ?', [localId]);
 }
 
 function insertOutboxOperation(operation) {
@@ -989,12 +1038,14 @@ export function deletePulledTransaction(clientTransactionId) {
 
 export function upsertLocalCompany(company, { deleted = false } = {}) {
   db.runSync(
-    `INSERT INTO companies (id, name, type, parentCompanyId, isActive, allowSubCompanies, priceAnomalyThresholdPercent, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO companies (id, name, type, parentCompanyId, isActive, allowSubCompanies, priceAnomalyThresholdPercent, updatedAt,
+         phone, address, logoMimeType, logoUpdatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name, type = excluded.type, parentCompanyId = excluded.parentCompanyId,
        isActive = excluded.isActive, allowSubCompanies = excluded.allowSubCompanies,
-       priceAnomalyThresholdPercent = excluded.priceAnomalyThresholdPercent, updatedAt = excluded.updatedAt`,
+       priceAnomalyThresholdPercent = excluded.priceAnomalyThresholdPercent, updatedAt = excluded.updatedAt,
+       phone = excluded.phone, address = excluded.address, logoMimeType = excluded.logoMimeType, logoUpdatedAt = excluded.logoUpdatedAt`,
     [
       company.id,
       company.name,
@@ -1006,6 +1057,10 @@ export function upsertLocalCompany(company, { deleted = false } = {}) {
         ? 20
         : Number(company.priceAnomalyThresholdPercent),
       company.updatedAt ?? null,
+      company.phone ?? null,
+      company.address ?? null,
+      company.logoMimeType ?? null,
+      company.logoUpdatedAt ?? null,
     ]
   );
 }
@@ -1048,9 +1103,14 @@ export function getAllLocalItemsForCompanies(companyIds) {
 
 // Every stock transaction on this device for the given companies — synced history plus this
 // device's unsynced ones.
-export function getLocalTransactions(companyIds) {
+// `since` (ISO time) limits it to rows at or after that moment, so screens showing a recent period
+// don't read a year of history.
+export function getLocalTransactions(companyIds, { since } = {}) {
   if (!companyIds.length) return [];
   const marks = companyIds.map(() => '?').join(',');
+  if (since) {
+    return db.getAllSync(`SELECT * FROM stock_transactions WHERE companyId IN (${marks}) AND occurredAt >= ?`, [...companyIds, since]);
+  }
   return db.getAllSync(`SELECT * FROM stock_transactions WHERE companyId IN (${marks})`, companyIds);
 }
 

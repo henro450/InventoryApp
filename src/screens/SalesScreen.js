@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, FlatList, Pressable, StyleSheet, RefreshControl } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { getSales } from '../reports/localReports';
@@ -37,12 +37,21 @@ export default function SalesScreen({ navigation }) {
   const [query, setQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
-  useLocalRefresh(() => setSales(getSales(user.companyId)));
+  // Only the chosen period is read from the phone, so a long history doesn't slow the screen.
+  const readSales = useCallback(() => {
+    const start = periodStart(period);
+    return getSales(user.companyId, { since: start === null ? undefined : new Date(start).toISOString() });
+  }, [user.companyId, period]);
+
+  useLocalRefresh(() => setSales(readSales()));
+  useEffect(() => {
+    setSales(readSales());
+  }, [readSales]);
 
   async function handleRefresh() {
     setRefreshing(true);
     await runSync(user.id);
-    setSales(getSales(user.companyId));
+    setSales(readSales());
     setRefreshing(false);
   }
 
@@ -89,13 +98,16 @@ export default function SalesScreen({ navigation }) {
       <FlatList
         data={visible}
         keyExtractor={(s) => s.key}
+        initialNumToRender={12}
+        maxToRenderPerBatch={12}
+        windowSize={7}
         contentContainerStyle={styles.content}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.ink3} />}
         keyboardShouldPersistTaps="handled"
         ListHeaderComponent={
           <View style={{ gap: 14, paddingBottom: 14 }}>
-            <LocalDataNotice user={user} onSynced={() => setSales(getSales(user.companyId))} />
+            <LocalDataNotice user={user} onSynced={() => setSales(readSales())} />
             <View style={styles.hero}>
               <Text style={styles.heroLabel}>Sold, after returns</Text>
               <Text style={styles.heroValue} adjustsFontSizeToFit numberOfLines={1}>
@@ -156,9 +168,9 @@ export default function SalesScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingBottom: 32 },
-  hero: { backgroundColor: colors.ink, borderRadius: 20, padding: 18, gap: 6 },
+  hero: { backgroundColor: colors.inkBg, borderRadius: 20, padding: 18, gap: 6 },
   heroLabel: { fontFamily: fonts.medium, fontSize: 13, color: colors.onDarkMuted },
-  heroValue: { fontFamily: fonts.display, fontSize: 36, lineHeight: 40, letterSpacing: -1, color: '#FFFFFF' },
+  heroValue: { fontFamily: fonts.display, fontSize: 36, lineHeight: 40, letterSpacing: -1, color: colors.onInk },
   heroSub: { fontSize: 13, color: colors.onDarkMuted },
   chips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   row: {

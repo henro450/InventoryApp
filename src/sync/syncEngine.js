@@ -21,8 +21,11 @@ import {
   deferItemChange,
   getDeferredChanges,
   removeDeferredChange,
+  setLocalItemPhotoMeta,
 } from '../db/localDb';
 import { uploadPendingReceipts } from '../utils/receiptPhotos';
+import { uploadPendingItemPhotos } from '../utils/itemPhotos';
+import { reportError, flushErrorReports } from '../utils/errorReporting';
 
 let syncInProgress = false;
 
@@ -75,6 +78,7 @@ function applyItemChange(operation, item, userId) {
     userId,
     isActive: operation === 'delete' ? false : item.isActive,
   });
+  setLocalItemPhotoMeta(itemLocalId(item), item);
 }
 
 // The feed carries companies, items, stock transactions (including transfers between branches),
@@ -161,6 +165,8 @@ export async function runSync(userId) {
 
     // Receipt photos go up once their money-out entry is on the server.
     operationsSynced += await uploadPendingReceipts(userId);
+    // Item photos likewise, once the item is on the server.
+    operationsSynced += await uploadPendingItemPhotos();
 
     let cursor = getSyncCursor(userId);
     let pulledChanges = 0;
@@ -179,8 +185,13 @@ export async function runSync(userId) {
 
     const result = { success: true, operationsSynced, pulledChanges, cursor };
     if (operationsSynced > 0 || pulledChanges > 0) notifySyncListeners(result);
+    // Online now, so send any error reports saved while offline.
+    flushErrorReports();
     return result;
   } catch (err) {
+    // A bug in applying changes is worth knowing about; a dropped connection or a server
+    // error (the API keeps its own) isn't.
+    if (!err.status && !/reach the server|too long to respond/i.test(err.message || '')) reportError(err, { during: 'sync' });
     return { error: err.message };
   } finally {
     syncInProgress = false;

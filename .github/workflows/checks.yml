@@ -1,0 +1,32 @@
+# Runs on every pull request and on pushes to the main branches: the unit tests for the sale,
+# report and Today maths (plain Node, no install needed), and a check that every source file
+# parses and every relative import points at a file that exists.
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main, feat/redesign-ui]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests and source check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - name: Every file parses and its imports exist
+        run: |
+          npm install --prefix "$RUNNER_TEMP/tools" --no-audit --no-fund @babel/parser@7
+          NODE_PATH="$RUNNER_TEMP/tools/node_modules" node scripts/check-sources.js

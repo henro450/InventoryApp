@@ -1,6 +1,13 @@
+import { activeScheme } from './scheme';
+
+export const isDark = activeScheme === 'dark';
+
 // Single source of truth for the app's look. Red is reserved for low stock / destructive
 // actions, amber for sync issues a person needs to look at, green for money and synced state.
-export const colors = {
+// Two palettes with the same keys; `colors` is the one this run of the app uses (see scheme.js).
+// `ink` is text; `inkBg` is the dark fill behind white text (hero cards, dark buttons, active
+// chips), which stays dark in dark mode. `*Fill` colours sit behind white text.
+const light = {
   ink: '#15171C',
   ink2: '#4A4F5A',
   ink3: '#5E6371',
@@ -16,27 +23,89 @@ export const colors = {
   line: '#E4E2DB',
   lineStrong: '#D6D3CA',
   lineSoft: '#F0EEE8',
+  dashed: '#CFCBC1',
   primary: '#1F3FD1',
   primarySoft: '#E9EDFD',
   primaryInk: '#1A2E8F',
   danger: '#B42318',
+  dangerFill: '#B42318',
   dangerSoft: '#FCEBE9',
   dangerLine: '#F3CFCA',
+  dangerBorder: '#EBC5C0',
   warn: '#8A5300',
   warnInk: '#6E4300',
   warnSoft: '#FDF1DC',
   warnLine: '#E9C98F',
   ok: '#17784A',
+  okFill: '#17784A',
   okSoft: '#E3F2EA',
+  okLine: '#BFE0CC',
+  okInk: '#0F5434',
+  okSub: '#2F6B4C',
   okOnDark: '#8FE0B5',
+  inkBg: '#15171C',
+  onInk: '#FFFFFF',
+  onInkFaint: '#C3C7D2',
+  tileMuted: '#F1F0EC',
+  tileMutedInk: '#8C909A',
   night: '#0E1322',
   camera: '#10141E',
   onDarkMuted: '#B9BFD0',
+  heroFaint: '#8D93A5',
 };
+
+const dark = {
+  ink: '#ECEDF1',
+  ink2: '#B9BDC8',
+  ink3: '#9CA1AE',
+  label: '#D7DAE1',
+  chevron: '#6D7280',
+  placeholder: '#7F8492',
+  ground: '#0F1115',
+  surface: '#181B21',
+  surfaceMuted: '#1F232A',
+  muted: '#272B33',
+  segment: '#23272F',
+  track: '#262A32',
+  line: '#2A2E36',
+  lineStrong: '#3A3F49',
+  lineSoft: '#21252C',
+  dashed: '#3D424C',
+  primary: '#6F88FF',
+  primarySoft: '#1C2447',
+  primaryInk: '#AFBEFF',
+  danger: '#FF8A80',
+  dangerFill: '#C93A2F',
+  dangerSoft: '#381B19',
+  dangerLine: '#5A2925',
+  dangerBorder: '#5A2925',
+  warn: '#F0B25A',
+  warnInk: '#F5C987',
+  warnSoft: '#33270F',
+  warnLine: '#5E4517',
+  ok: '#5FD69A',
+  okFill: '#1E8A56',
+  okSoft: '#132C1E',
+  okLine: '#245A3B',
+  okInk: '#8FE0B5',
+  okSub: '#7CC59F',
+  okOnDark: '#8FE0B5',
+  inkBg: '#262A35',
+  onInk: '#FFFFFF',
+  onInkFaint: '#C3C7D2',
+  tileMuted: '#22262D',
+  tileMutedInk: '#80859A',
+  night: '#0B0E17',
+  camera: '#10141E',
+  onDarkMuted: '#B9BFD0',
+  heroFaint: '#8D93A5',
+};
+
+export const colors = isDark ? dark : light;
 
 // Money out, by kind: `ink` on light surfaces, `onDark` for the Overview's dark card, `soft` for
 // icon tiles. Calm hues on purpose; money going out is normal, so none of them is red.
-export const outflowColors = {
+const outflowLight = {
   stock: { ink: '#6B7489', onDark: '#B9BFD0', soft: '#ECEEF2' },
   expense: { ink: '#A8571A', onDark: '#F2B880', soft: '#F6E8DC' },
   savings: { ink: '#17784A', onDark: '#8FE0B5', soft: '#E3F2EA' },
@@ -46,6 +115,20 @@ export const outflowColors = {
   refund: { ink: '#7A6A12', onDark: '#E6D88A', soft: '#F4F0D8' },
   tax: { ink: '#366B87', onDark: '#8FC3DC', soft: '#E3EFF5' },
 };
+
+// In dark mode the light hues become the text colour and the tiles turn into dim tints.
+const outflowDark = {
+  stock: { ink: '#B9BFD0', onDark: '#B9BFD0', soft: '#262A33' },
+  expense: { ink: '#F2B880', onDark: '#F2B880', soft: '#36271B' },
+  savings: { ink: '#8FE0B5', onDark: '#8FE0B5', soft: '#152E21' },
+  savings_return: { ink: '#B9BFD0', onDark: '#B9BFD0', soft: '#272B33' },
+  withdrawal: { ink: '#C9B6F2', onDark: '#C9B6F2', soft: '#2A2340' },
+  loan: { ink: '#93ACF5', onDark: '#93ACF5', soft: '#1D2645' },
+  refund: { ink: '#E6D88A', onDark: '#E6D88A', soft: '#302C17' },
+  tax: { ink: '#8FC3DC', onDark: '#8FC3DC', soft: '#182C36' },
+};
+
+export const outflowColors = isDark ? outflowDark : outflowLight;
 
 export const fonts = {
   regular: 'IBMPlexSans_400Regular',
@@ -86,14 +169,14 @@ export const type = {
 
 export const shadow = {
   raised: {
-    shadowColor: '#15171C',
+    shadowColor: '#000000',
     shadowOpacity: 0.18,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 6 },
     elevation: 6,
   },
   primary: {
-    shadowColor: '#1F3FD1',
+    shadowColor: colors.primary,
     shadowOpacity: 0.35,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 8 },

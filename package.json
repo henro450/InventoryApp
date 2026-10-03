@@ -8,7 +8,10 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "report-parity": "node scripts/report-parity.js"
+    "report-parity": "node scripts/report-parity.js",
+    "test": "node --import ./test/support/register.mjs --test 'test/*.test.mjs'",
+    "update:preview": "eas update --channel preview",
+    "update:production": "eas update --channel production"
   },
   "dependencies": {
     "@expo-google-fonts/bricolage-grotesque": "^0.4.1",
@@ -23,6 +26,7 @@
     "expo": "~51.0.0",
     "expo-camera": "~15.0.16",
     "expo-clipboard": "~6.0.3",
+    "expo-constants": "~16.0.2",
     "expo-contacts": "~13.0.5",
     "expo-device": "~6.0.2",
     "expo-document-picker": "~12.0.2",
@@ -37,6 +41,7 @@
     "expo-secure-store": "~13.0.2",
     "expo-sharing": "~12.0.1",
     "expo-sqlite": "~14.0.6",
+    "expo-updates": "~0.25.28",
     "jwt-decode": "^4.0.0",
     "react": "18.2.0",
     "react-native": "0.74.5",

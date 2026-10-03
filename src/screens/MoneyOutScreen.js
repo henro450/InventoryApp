@@ -372,9 +372,9 @@ const styles = StyleSheet.create({
   breakPct: { width: 38, textAlign: 'right', fontFamily: fonts.mono, fontSize: 12, color: colors.ink3 },
   savingsRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 16,
-    backgroundColor: colors.okSoft, borderWidth: 1, borderColor: '#BFE0CC',
+    backgroundColor: colors.okSoft, borderWidth: 1, borderColor: colors.okLine,
   },
-  savingsTitle: { fontFamily: fonts.semibold, fontSize: 15, color: '#0F5434' },
+  savingsTitle: { fontFamily: fonts.semibold, fontSize: 15, color: colors.okInk },
   chipScroll: { marginHorizontal: -20 },
   chips: { paddingHorizontal: 20, gap: 8 },
   dayRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 2, marginTop: 4 },
@@ -390,5 +390,5 @@ const styles = StyleSheet.create({
     height: 54, paddingLeft: 16, paddingRight: 20, borderRadius: 18, backgroundColor: colors.primary,
     flexDirection: 'row', alignItems: 'center', gap: 8, ...shadow.primary,
   },
-  fabText: { fontFamily: fonts.semibold, fontSize: 15, color: '#FFFFFF' },
+  fabText: { fontFamily: fonts.semibold, fontSize: 15, color: colors.onInk },
 });

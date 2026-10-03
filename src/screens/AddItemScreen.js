@@ -2,10 +2,12 @@ import React, { useMemo, useState } from 'react';
 import { View, ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Pressable } from 'react-native';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
-import { getLocalItems, saveLocalItem } from '../db/localDb';
+import { getLocalItems, getLocalItemByLocalId, saveLocalItem, setLocalItemPhoto } from '../db/localDb';
 import { useAuth } from '../context/AuthContext';
 import { runSync } from '../sync/syncEngine';
 import Icon from '../components/Icon';
+import ItemThumb from '../components/ItemThumb';
+import { chooseItemPhoto, keepItemPhoto } from '../utils/itemPhotos';
 import { Text, Screen, NavHeader, Field, Chip, Stepper, BottomBar, Button, Checkbox } from '../components/ui';
 import { formatMoney } from '../utils/format';
 import { colors, fonts, type } from '../theme';
@@ -48,6 +50,20 @@ export default function AddItemScreen({ navigation, route }) {
   const hasCost = cost !== null && cost !== undefined;
   const sellingNumber = sellingPrice.trim() === '' ? null : Number(sellingPrice);
   const [submitting, setSubmitting] = useState(false);
+  // undefined = unchanged, a uri = a new photo picked here, null = remove the photo.
+  const [photo, setPhoto] = useState(undefined);
+  const hadPhoto = !!(editingItem && editingItem.photoPending !== 2 && (editingItem.photoUri || editingItem.photoMimeType));
+  const showsPhoto = photo === undefined ? hadPhoto : !!photo;
+  const previewItem = {
+    ...(editingItem || {}),
+    name: name || '?',
+    ...(photo !== undefined ? { photoUri: photo, photoPending: photo ? 1 : 2 } : {}),
+  };
+
+  async function handlePickPhoto() {
+    const picked = await chooseItemPhoto();
+    if (picked) setPhoto(picked);
+  }
 
   // Suggest the categories this company already uses, most common first.
   const categorySuggestions = useMemo(() => {
@@ -74,9 +90,13 @@ export default function AddItemScreen({ navigation, route }) {
     setSubmitting(true);
 
     try {
+      let localId = editingItem?.localId;
       if (isEditMode) {
+        // The row as it is now, not as it was when the screen opened: a sync since then may have
+        // changed its stock or version (a photo upload bumps the version).
+        const current = getLocalItemByLocalId(editingItem.localId) || editingItem;
         saveLocalItem({
-          ...editingItem,
+          ...current,
           name,
           category: category || null,
           unit,
@@ -90,6 +110,7 @@ export default function AddItemScreen({ navigation, route }) {
         });
       } else {
         const clientItemId = uuidv4();
+        localId = clientItemId;
         saveLocalItem({
           id: null,
           localId: clientItemId,
@@ -110,6 +131,8 @@ export default function AddItemScreen({ navigation, route }) {
           userId: user.id,
         });
       }
+      if (photo) setLocalItemPhoto(localId, await keepItemPhoto(photo, localId));
+      else if (photo === null && hadPhoto) setLocalItemPhoto(localId, null);
 
       // Best-effort immediate sync; safe to fail silently if offline.
       runSync(user.id);
@@ -161,6 +184,23 @@ export default function AddItemScreen({ navigation, route }) {
           )}
 
           <Field label="Item name" value={name} onChangeText={setName} placeholder="e.g. Widget" />
+
+          <View style={styles.photoRow}>
+            <ItemThumb item={previewItem} size={64} />
+            <View style={{ flex: 1, gap: 8 }}>
+              <Text style={type.label}>Photo <Text style={type.caption}>(optional)</Text></Text>
+              <View style={styles.chips}>
+                <Button
+                  title={showsPhoto ? 'Change photo' : 'Add photo'}
+                  variant="secondary"
+                  icon="camera"
+                  height={40}
+                  onPress={handlePickPhoto}
+                />
+                {showsPhoto && <Button title="Remove" variant="ghost" height={40} onPress={() => setPhoto(null)} />}
+              </View>
+            </View>
+          </View>
 
           <Field
             label="Selling price"
@@ -281,5 +321,6 @@ const styles = StyleSheet.create({
   },
   scanText: { fontFamily: fonts.semibold, fontSize: 14, color: colors.primary },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  photoRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   offline: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
 });

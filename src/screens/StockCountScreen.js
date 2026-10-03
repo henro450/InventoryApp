@@ -231,7 +231,7 @@ const styles = StyleSheet.create({
   bar: { height: 6, borderRadius: 3, backgroundColor: colors.surfaceMuted, overflow: 'hidden', marginTop: 4 },
   barFill: { height: 6, borderRadius: 3, backgroundColor: colors.primary },
   searchRow: { flexDirection: 'row', gap: 10 },
-  scanButton: { width: 48, height: 48, borderRadius: 14, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
+  scanButton: { width: 48, height: 48, borderRadius: 14, backgroundColor: colors.inkBg, alignItems: 'center', justifyContent: 'center' },
   chips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 16,

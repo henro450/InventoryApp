@@ -7,6 +7,7 @@ import { colors, fonts, shadow } from '../theme';
 
 const TAB_META = {
   Overview: { label: 'Overview', icon: 'home' },
+  Today: { label: 'Today', icon: 'home' },
   Inventory: { label: 'Inventory', icon: 'box' },
   Sales: { label: 'Sales', icon: 'receipt' },
   Reports: { label: 'Reports', icon: 'chart' },
@@ -66,7 +67,7 @@ const styles = StyleSheet.create({
   item: { flex: 1, maxWidth: 72, minHeight: 48, alignItems: 'center', gap: 4 },
   label: { fontSize: 11 },
   scanButton: {
-    width: 50, height: 50, marginTop: -20, borderRadius: 17, backgroundColor: colors.ink,
+    width: 50, height: 50, marginTop: -20, borderRadius: 17, backgroundColor: colors.inkBg,
     alignItems: 'center', justifyContent: 'center', ...shadow.raised,
   },
 });
