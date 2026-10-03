@@ -50,6 +50,7 @@ async function pullLocalState() {
   const transactions = new Map();
   const companies = new Map();
   const payments = new Map();
+  const supplierPayments = new Map();
   let cursor = '0';
   let hasMore = true;
   while (hasMore) {
@@ -81,13 +82,25 @@ async function pullLocalState() {
         });
       } else if (change.entityType === 'debt_payment') {
         payments.set(d.clientPaymentId, { ...d, amount: Number(d.amount) });
+      } else if (change.entityType === 'supplier_payment') {
+        supplierPayments.set(d.clientPaymentId, { ...d, amount: Number(d.amount) });
       }
     }
     cursor = page.cursor;
     hasMore = page.hasMore;
   }
-  return { items: [...items.values()], transactions: [...transactions.values()], companies: [...companies.values()], payments: [...payments.values()] };
+  return {
+    items: [...items.values()],
+    transactions: [...transactions.values()],
+    companies: [...companies.values()],
+    payments: [...payments.values()],
+    supplierPayments: [...supplierPayments.values()],
+  };
 }
+
+// Lists whose order only differs between rows that tie (same name, same balance) are compared
+// in a fixed order.
+const byFirst = (rows) => [...rows].sort((x, y) => String(x[0]).localeCompare(String(y[0]), 'en', { numeric: true }));
 
 let failures = 0;
 let checks = 0;
@@ -118,7 +131,8 @@ function expectClose(label, local, server) {
 
   // --- Test data: two items, purchases with a >20% price jump, sales (one defaulted), an adjustment.
   const stamp = Date.now();
-  const day = (n) => new Date(Date.UTC(2026, 0, 1 + n, 12, 0, stamp % 60)).toISOString();
+  // A different time of day each run, so rows from earlier runs never tie with this run's.
+  const day = (n) => new Date(Date.UTC(2026, 0, 1 + n, 12, Math.floor(stamp / 60000) % 60, Math.floor(stamp / 1000) % 60, stamp % 1000)).toISOString();
   const a = (await call('POST', '/items', { sku: `PAR-A-${stamp}`, name: `Parity A ${stamp}`, category: 'Parity', lowStockThreshold: 5 })).item;
   const b = (await call('POST', '/items', { sku: `PAR-B-${stamp}`, name: `Parity B ${stamp}`, category: 'Parity', lowStockThreshold: 50 })).item;
   const tx = (itemId, type, quantity, unitPrice, n, paymentMethod, extra = {}) =>
@@ -178,6 +192,28 @@ function expectClose(label, local, server) {
     lines: [{ clientTransactionId: `par-${stamp}-ret-2`, returnOf: `par-${stamp}-2`, quantity: 2, paymentMethod: 'transfer' }],
   });
   await repay(15, phone, 10, 'pos');
+  // Suppliers: a part-paid purchase (owing 140) with an expiry date, then 50 paid to the supplier.
+  const supplierPhone = `081${String(stamp).slice(-8)}`;
+  await tx(c.id, 'in', 4, 60, 16, undefined, { amountPaid: 100, supplierName: 'Parity Supplier', supplierPhone, expiryDate: '2027-01-31' });
+  await call('POST', '/suppliers/payments', {
+    clientPaymentId: `par-sp-${stamp}`, supplierName: 'Parity Supplier', supplierPhone, amount: 50, paymentMethod: 'transfer', occurredAt: day(17),
+  });
+  // Packs: bought as 2 cartons of 12 at 1,000 a carton, 1 carton sold at 1,500 (prices per piece
+  // to 4 decimal places, as the app sends them).
+  const d = (await call('POST', '/items', { sku: `PAR-D-${stamp}`, name: `Parity D ${stamp}`, category: 'Parity', packSize: 12, packName: 'carton' })).item;
+  await tx(d.id, 'in', 24, Math.round((1000 / 12) * 10000) / 10000, 18);
+  await tx(d.id, 'out', 12, Math.round((1500 / 12) * 10000) / 10000, 19, 'cash');
+  // A transfer of 3 of item C to the first sub company (if there is one), creating it there.
+  const subs = (await call('GET', '/companies/mine')).subCompanies.filter((x) => x.isActive !== false);
+  const sub = subs[0];
+  if (sub) {
+    await call('POST', '/transfers', {
+      transferId: `par-tr-${stamp}`, fromCompanyId: me.companyId, toCompanyId: sub.id, fromItemId: c.id, toClientItemId: `par-tr-item-${stamp}`,
+      quantity: 3, outClientTransactionId: `par-${stamp}-tr-out`, inClientTransactionId: `par-${stamp}-tr-in`, occurredAt: day(20),
+    });
+  } else {
+    console.warn('No active sub company: skipping the transfer checks.');
+  }
 
   const local = await pullLocalState();
   const serverIdOf = new Map(local.items.map((i) => [i.localId, i.id]));
@@ -189,8 +225,8 @@ function expectClose(label, local, server) {
   const soh = await call('GET', `/reports/stock-on-hand?companyId=${own}`);
   expectEqual(
     'stock-on-hand',
-    math.stockOnHand(local.items, own).map((i) => [i.id, i.quantityOnHand]),
-    soh.items.map((i) => [i.id, Number(i.quantityOnHand)])
+    byFirst(math.stockOnHand(local.items, own).map((i) => [i.id, i.quantityOnHand])),
+    byFirst(soh.items.map((i) => [i.id, Number(i.quantityOnHand)]))
   );
 
   // Sales vs purchases
@@ -227,11 +263,11 @@ function expectClose(label, local, server) {
     const qs = new URLSearchParams({ companyId: own, limit: 200, ...r }).toString();
     const server = await call('GET', `/reports/transaction-margins?${qs}`);
     const mine = math.transactionMargins(local.items, local.transactions, own, { ...r, limit: 200 });
-    expectEqual(
-      `transaction-margins ${JSON.stringify(r)}`,
-      mine.transactions.map((t) => [t.transactionId, t.paymentMethod, t.amountPaid, t.customerName, t.costAvailable, t.estimatedCost, t.estimatedMargin]),
-      server.transactions.map((t) => [t.transactionId, t.paymentMethod, t.amountPaid, t.customerName, t.costAvailable, t.estimatedCost, t.estimatedMargin])
-    );
+    // Rows recorded at the same moment can come back in either order; compare them by id.
+    const rows = (list) => list
+      .map((t) => [t.transactionId, t.paymentMethod, t.amountPaid, t.customerName, t.costAvailable, t.estimatedCost, t.estimatedMargin])
+      .sort((x, y) => x[0] - y[0]);
+    expectEqual(`transaction-margins ${JSON.stringify(r)}`, rows(mine.transactions), rows(server.transactions));
   }
 
   // Debtors
@@ -239,8 +275,8 @@ function expectClose(label, local, server) {
   const mineDebtors = math.debtors(local.transactions, local.payments, own);
   expectEqual(
     'debtors',
-    mineDebtors.customers.map((c) => [c.customerPhone, c.customerName, c.totalOwed, c.totalRepaid, c.balance, c.creditSales]),
-    serverDebtors.customers.map((c) => [c.customerPhone, c.customerName, c.totalOwed, c.totalRepaid, c.balance, c.creditSales])
+    byFirst(mineDebtors.customers.map((c) => [c.customerPhone, c.customerName, c.totalOwed, c.totalRepaid, c.balance, c.creditSales])),
+    byFirst(serverDebtors.customers.map((c) => [c.customerPhone, c.customerName, c.totalOwed, c.totalRepaid, c.balance, c.creditSales]))
   );
   for (const k of ['outstanding', 'customersOwing', 'totalRepaid']) expectClose(`debtors totals ${k}`, mineDebtors.totals[k], serverDebtors.totals[k]);
   const thisCustomer = mineDebtors.customers.find((c) => c.customerPhone === phone);
@@ -250,12 +286,12 @@ function expectClose(label, local, server) {
   const disc = await call('GET', `/reports/discrepancies?companyId=${own}`);
   expectEqual(
     'discrepancies',
-    math.discrepancies(local.items, local.transactions, own).discrepancies.map((d) => [d.transactionId, d.expected, d.counted, d.discrepancy]),
-    disc.discrepancies.map((d) => [d.transactionId, d.expected, d.counted, d.discrepancy])
+    byFirst(math.discrepancies(local.items, local.transactions, own).discrepancies.map((d) => [d.transactionId, d.expected, d.counted, d.discrepancy])),
+    byFirst(disc.discrepancies.map((d) => [d.transactionId, d.expected, d.counted, d.discrepancy]))
   );
 
   // Price trend (ids differ: server price_history rows vs transactions — compare the points)
-  for (const item of [a, b, c]) {
+  for (const item of [a, b, c, d]) {
     const localId = local.items.find((i) => i.id === item.id).localId;
     const server = await call('GET', `/reports/price-trend?companyId=${own}&itemId=${item.id}`);
     expectEqual(
@@ -273,9 +309,43 @@ function expectClose(label, local, server) {
   expectEqual('alerts low stock', mineAlerts.lowStockItems.map((i) => i.id), serverAlerts.lowStockItems.map((i) => i.id));
   expectEqual(
     'alerts price anomalies',
-    mineAlerts.priceAnomalies.map((p) => [serverIdOf.get(p.itemId), p.previousPrice, p.newPrice, new Date(p.effectiveDate).toISOString()]),
-    serverAlerts.priceAnomalies.map((p) => [p.itemId, p.previousPrice, p.newPrice, new Date(p.effectiveDate).toISOString()])
+    byFirst(mineAlerts.priceAnomalies.map((p) => [serverIdOf.get(p.itemId), p.previousPrice, p.newPrice, new Date(p.effectiveDate).toISOString()])),
+    byFirst(serverAlerts.priceAnomalies.map((p) => [p.itemId, p.previousPrice, p.newPrice, new Date(p.effectiveDate).toISOString()]))
   );
+
+  // Suppliers
+  const serverSuppliers = await call('GET', `/suppliers?companyId=${own}`);
+  const mineSuppliers = math.suppliers(local.transactions, local.supplierPayments, own);
+  expectEqual(
+    'suppliers',
+    byFirst(mineSuppliers.suppliers.map((x) => [x.supplierPhone, x.supplierName, x.totalBought, x.totalOwed, x.totalPaid, x.balance, x.purchases])),
+    byFirst(serverSuppliers.suppliers.map((x) => [x.supplierPhone, x.supplierName, x.totalBought, x.totalOwed, x.totalPaid, x.balance, x.purchases]))
+  );
+  for (const k of ['outstanding', 'suppliersOwed', 'totalPaid']) expectClose(`suppliers totals ${k}`, mineSuppliers.totals[k], serverSuppliers.totals[k]);
+  expectClose('parity supplier balance (240-100 - 50)', mineSuppliers.suppliers.find((x) => x.supplierPhone === supplierPhone)?.balance, 90);
+
+  // Packs: the carton prices add back up exactly.
+  const dSales = math.salesVsPurchases(local.transactions.filter((t) => t.itemId === d.id), own, {}, []);
+  expectClose('pack purchase total (2 cartons at 1,000)', dSales.totalPurchaseCost, 2000);
+  expectClose('pack sale total (1 carton at 1,500)', dSales.totalSalesRevenue, 1500);
+
+  // Transfer: the receiving branch's new item, its stock and its cost history.
+  if (sub) {
+    const moved = local.items.find((i) => i.clientItemId === `par-tr-item-${stamp}`);
+    expectEqual('transfer created the item in the sub company', [moved?.companyId, moved?.quantityOnHand, moved?.lastPurchasePrice], [sub.id, 3, 60]);
+    const subSoh = await call('GET', `/reports/stock-on-hand?companyId=${sub.id}`);
+    expectEqual(
+      'sub stock-on-hand after transfer',
+      byFirst(math.stockOnHand(local.items, sub.id).map((i) => [i.id, i.quantityOnHand])),
+      byFirst(subSoh.items.map((i) => [i.id, Number(i.quantityOnHand)]))
+    );
+    const server = await call('GET', `/reports/price-trend?companyId=${sub.id}&itemId=${moved.id}`);
+    expectEqual(
+      'price-trend of the transferred item',
+      math.priceTrend(local.transactions, sub.id, { itemId: moved.localId }).history.map((h) => [h.priceType, h.amount, new Date(h.effectiveDate).toISOString()]),
+      server.history.map((h) => [h.priceType, h.amount, new Date(h.effectiveDate).toISOString()])
+    );
+  }
 
   // Oversight summary
   for (const r of ranges) {

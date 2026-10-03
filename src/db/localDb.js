@@ -111,6 +111,22 @@ export function initLocalDb() {
       createdByUserId INTEGER
     );
 
+    -- Money paid to suppliers against part-paid or credit purchases (see saveLocalSupplierPayment).
+    -- Synced history plus this device's unsynced payments, like debt_payments.
+    CREATE TABLE IF NOT EXISTS supplier_payments (
+      clientPaymentId TEXT PRIMARY KEY,
+      id INTEGER,
+      companyId INTEGER NOT NULL,
+      supplierName TEXT NOT NULL,
+      supplierPhone TEXT NOT NULL,
+      amount REAL NOT NULL,
+      paymentMethod TEXT NOT NULL,
+      occurredAt TEXT NOT NULL,
+      syncStatus TEXT DEFAULT 'pending',
+      userId INTEGER,
+      createdByUserId INTEGER
+    );
+
     -- Money out other than stock purchases (expenses, savings, withdrawals, loans, refunds, taxes)
     -- and the savings goals that savings point at. Synced history plus this device's unsynced
     -- entries, like debt_payments. See saveLocalOutflow / saveLocalSavingsGoal.
@@ -183,6 +199,20 @@ export function initLocalDb() {
   // Returns ('return' rows): the sale row's clientTransactionId and 'void' | 'return'.
   tryAddColumn('stock_transactions', 'returnOf TEXT');
   tryAddColumn('stock_transactions', 'returnReason TEXT');
+  // Purchases: who it was bought from (amountPaid below the total = owed to them) and when the batch expires.
+  tryAddColumn('stock_transactions', 'supplierName TEXT');
+  tryAddColumn('stock_transactions', 'supplierPhone TEXT');
+  tryAddColumn('stock_transactions', 'expiryDate TEXT'); // 'YYYY-MM-DD'
+  // Stock moved between branches ('transfer_out' / 'transfer_in'): both rows share transferId.
+  tryAddColumn('stock_transactions', 'transferId TEXT');
+  tryAddColumn('stock_transactions', 'transferCompanyId INTEGER');
+  // Packs: e.g. packSize 24, packName 'carton'. Stock stays in the item's own unit.
+  tryAddColumn('items', 'packSize INTEGER');
+  tryAddColumn('items', 'packName TEXT');
+  // Receipt photos: the server's marker, the photo on this phone, and whether it still needs uploading.
+  tryAddColumn('money_outflows', 'receiptMimeType TEXT');
+  tryAddColumn('money_outflows', 'receiptUri TEXT');
+  tryAddColumn('money_outflows', 'receiptPending INTEGER DEFAULT 0');
   db.execSync(`
     CREATE INDEX IF NOT EXISTS stock_transactions_company_idx ON stock_transactions (companyId, type, occurredAt);
     CREATE INDEX IF NOT EXISTS stock_transactions_item_idx ON stock_transactions (itemLocalId);
@@ -195,7 +225,7 @@ export function initLocalDb() {
 // cursor past company/transaction changes without storing them, so rewind every cursor to
 // download the full feed once. Item upserts are idempotent and items with pending local
 // work are still protected, so replaying the feed is safe.
-const LOCAL_SCHEMA_VERSION = 4; // 4: keeps saleId on transactions (multi-item sales)
+const LOCAL_SCHEMA_VERSION = 5; // 5: keeps supplier, expiry, transfer and pack fields
 function resyncIfSchemaChanged() {
   const row = db.getFirstSync("SELECT value FROM sync_meta WHERE key = 'schemaVersion'");
   if (Number(row?.value || 1) >= LOCAL_SCHEMA_VERSION) return;
@@ -267,15 +297,15 @@ export function setSyncCursor(userId, cursor) {
 // --- Items ---
 export function upsertLocalItem(item) {
   db.runSync(
-    `INSERT INTO items (id, localId, clientItemId, sku, name, category, unit, companyId, quantityOnHand, lowStockThreshold, lastPurchasePrice, version, updatedAt, syncStatus, userId, isActive, allowDecimal, sellingPrice)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO items (id, localId, clientItemId, sku, name, category, unit, companyId, quantityOnHand, lowStockThreshold, lastPurchasePrice, version, updatedAt, syncStatus, userId, isActive, allowDecimal, sellingPrice, packSize, packName)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(localId) DO UPDATE SET
        id=excluded.id, clientItemId=excluded.clientItemId, sku=excluded.sku, name=excluded.name,
        category=excluded.category, unit=excluded.unit, companyId=excluded.companyId,
        quantityOnHand=excluded.quantityOnHand, lowStockThreshold=excluded.lowStockThreshold,
        lastPurchasePrice=excluded.lastPurchasePrice, version=excluded.version, updatedAt=excluded.updatedAt,
        syncStatus=excluded.syncStatus, userId=excluded.userId, isActive=excluded.isActive,
-       allowDecimal=excluded.allowDecimal, sellingPrice=excluded.sellingPrice`,
+       allowDecimal=excluded.allowDecimal, sellingPrice=excluded.sellingPrice, packSize=excluded.packSize, packName=excluded.packName`,
     [
       item.id ?? null,
       item.localId,
@@ -295,6 +325,8 @@ export function upsertLocalItem(item) {
       item.isActive === undefined || item.isActive === null ? 1 : (item.isActive ? 1 : 0),
       item.allowDecimal ? 1 : 0,
       item.sellingPrice === null || item.sellingPrice === undefined || item.sellingPrice === '' ? null : Number(item.sellingPrice),
+      Number(item.packSize) > 1 ? Number(item.packSize) : null,
+      Number(item.packSize) > 1 ? item.packName || 'pack' : null,
     ]
   );
 }
@@ -335,6 +367,8 @@ function itemOperation(item) {
         lowStockThreshold: item.lowStockThreshold,
         allowDecimal: !!item.allowDecimal,
         sellingPrice: item.sellingPrice ?? null,
+        packSize: Number(item.packSize) > 1 ? Number(item.packSize) : null,
+        packName: Number(item.packSize) > 1 ? item.packName || 'pack' : null,
       }
     : {
         id: item.id,
@@ -344,6 +378,8 @@ function itemOperation(item) {
         lowStockThreshold: item.lowStockThreshold,
         allowDecimal: !!item.allowDecimal,
         sellingPrice: item.sellingPrice ?? null,
+        packSize: Number(item.packSize) > 1 ? Number(item.packSize) : null,
+        packName: Number(item.packSize) > 1 ? item.packName || 'pack' : null,
       };
 
   return { operationType, payload };
@@ -460,8 +496,9 @@ export function deleteLocalItem(localId) {
 export function insertLocalTransaction(tx) {
   db.runSync(
     `INSERT INTO stock_transactions
-       (clientTransactionId, itemLocalId, itemServerId, itemClientItemId, companyId, type, quantity, unitPrice, priceWasDefaulted, occurredAt, syncStatus, userId, previousQuantity, createdByUserId, paymentMethod, amountPaid, customerName, customerPhone, saleId, paymentBreakdown, returnOf, returnReason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (clientTransactionId, itemLocalId, itemServerId, itemClientItemId, companyId, type, quantity, unitPrice, priceWasDefaulted, occurredAt, syncStatus, userId, previousQuantity, createdByUserId, paymentMethod, amountPaid, customerName, customerPhone, saleId, paymentBreakdown, returnOf, returnReason,
+        supplierName, supplierPhone, expiryDate, transferId, transferCompanyId)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       tx.clientTransactionId,
       tx.itemLocalId,
@@ -477,15 +514,32 @@ export function insertLocalTransaction(tx) {
       tx.previousQuantity ?? null,
       tx.userId ?? null,
       isSaleOrReturn(tx) ? tx.paymentMethod || 'cash' : null,
-      isSaleOrReturn(tx) && tx.amountPaid !== undefined ? tx.amountPaid : null,
+      (isSaleOrReturn(tx) || tx.type === 'in') && tx.amountPaid !== undefined ? tx.amountPaid : null,
       isSaleOrReturn(tx) ? tx.customerName || null : null,
       isSaleOrReturn(tx) && tx.customerPhone ? normalizePhone(tx.customerPhone) : null,
       isSaleOrReturn(tx) ? tx.saleId || null : null,
       isSaleOrReturn(tx) && tx.paymentMethod === 'mixed' && tx.paymentBreakdown ? JSON.stringify(tx.paymentBreakdown) : null,
       tx.type === 'return' ? tx.returnOf : null,
       tx.type === 'return' ? tx.returnReason || 'return' : null,
+      tx.type === 'in' ? tx.supplierName?.trim() || null : null,
+      tx.type === 'in' && tx.supplierPhone ? normalizePhone(tx.supplierPhone) : null,
+      tx.type === 'in' ? tx.expiryDate || null : null,
+      isTransfer(tx) ? tx.transferId : null,
+      isTransfer(tx) ? tx.transferCompanyId : null,
     ]
   );
+}
+
+function isTransfer(tx) {
+  return tx.type === 'transfer_in' || tx.type === 'transfer_out';
+}
+
+// How a movement changes the item's stock: purchases, returns and transfers in add to it, sales
+// and transfers out take from it, and an adjustment (a count) sets it.
+export function stockAfter(current, tx) {
+  if (tx.type === 'in' || tx.type === 'return' || tx.type === 'transfer_in') return current + Number(tx.quantity);
+  if (tx.type === 'out' || tx.type === 'transfer_out') return current - Number(tx.quantity);
+  return Number(tx.quantity);
 }
 
 // Sales and returns carry payment and customer fields; purchases and adjustments don't.
@@ -540,7 +594,7 @@ function writeLocalStockTransaction(tx) {
     if (current <= 0) throw Object.assign(new Error('Out of stock'), { code: 'OUT_OF_STOCK', available: current });
     if (tx.quantity > current) throw Object.assign(new Error('Not enough stock'), { code: 'INSUFFICIENT_STOCK', available: current });
   }
-  const nextQuantity = tx.type === 'in' || tx.type === 'return' ? current + tx.quantity : tx.type === 'out' ? current - tx.quantity : tx.quantity;
+  const nextQuantity = stockAfter(current, tx);
 
   const record = {
     ...tx,
@@ -571,16 +625,99 @@ function writeLocalStockTransaction(tx) {
       unitPrice: tx.unitPrice,
       paymentMethod: isSaleOrReturn(tx) ? tx.paymentMethod || 'cash' : undefined,
       paymentBreakdown: isSaleOrReturn(tx) && tx.paymentMethod === 'mixed' ? tx.paymentBreakdown : undefined,
-      amountPaid: isSaleOrReturn(tx) && tx.amountPaid !== null && tx.amountPaid !== undefined ? tx.amountPaid : undefined,
+      amountPaid: (isSaleOrReturn(tx) || tx.type === 'in') && tx.amountPaid !== null && tx.amountPaid !== undefined ? tx.amountPaid : undefined,
       customerName: tx.type === 'out' ? tx.customerName || undefined : undefined,
       customerPhone: tx.type === 'out' && tx.customerPhone ? normalizePhone(tx.customerPhone) : undefined,
       saleId: tx.type === 'out' && tx.saleId ? tx.saleId : undefined,
       returnOf: tx.type === 'return' ? tx.returnOf : undefined,
       returnReason: tx.type === 'return' ? tx.returnReason || 'return' : undefined,
+      supplierName: tx.type === 'in' ? tx.supplierName?.trim() || undefined : undefined,
+      supplierPhone: tx.type === 'in' && tx.supplierPhone ? normalizePhone(tx.supplierPhone) : undefined,
+      expiryDate: tx.type === 'in' ? tx.expiryDate || undefined : undefined,
       occurredAt: tx.occurredAt,
     },
   });
   return { previousQuantity: current, quantityOnHand: nextQuantity };
+}
+
+// Several adjustments from one stock count, saved together: each item's stock is set to what was
+// counted, and each count syncs like a single adjustment.
+export function saveLocalCount(transactions) {
+  return saveLocalTransactions(transactions.map((tx) => ({ ...tx, type: 'adjustment' })));
+}
+
+// Moves stock between two branches (main company admins). Both rows and both items' stock change
+// together, with one outbox operation the server applies all-or-nothing. When the receiving
+// branch doesn't stock the item yet, `newTarget` is a copy of it to create there: the phone and
+// the server create it under the same clientItemId, so the copy the server sends back replaces
+// this one in place.
+export function saveLocalTransfer({ transferId, from, to, quantity, occurredAt, userId, companyId, newTarget }) {
+  return runLocalTransaction(() => {
+    if (newTarget) upsertLocalItem({ ...newTarget, quantityOnHand: 0, syncStatus: 'pending', userId });
+    const source = db.getFirstSync('SELECT * FROM items WHERE localId = ?', [from.itemLocalId]);
+    const target = db.getFirstSync('SELECT * FROM items WHERE localId = ?', [to.itemLocalId]);
+    if (!source || !target) throw new Error('This item is no longer on this device. Go back and try again.');
+    const sourceBefore = Number(source.quantityOnHand) || 0;
+    if (quantity > sourceBefore) throw Object.assign(new Error('Not enough stock'), { code: 'INSUFFICIENT_STOCK', available: sourceBefore });
+    const targetBefore = Number(target.quantityOnHand) || 0;
+    const cost = source.lastPurchasePrice ?? null;
+    const now = new Date().toISOString();
+    const rows = [
+      { row: from, item: source, before: sourceBefore, type: 'transfer_out', other: to.companyId },
+      { row: to, item: target, before: targetBefore, type: 'transfer_in', other: from.companyId },
+    ];
+    for (const { row, item, before, type, other } of rows) {
+      insertLocalTransaction({
+        clientTransactionId: row.clientTransactionId,
+        itemLocalId: item.localId,
+        itemServerId: item.id ?? null,
+        itemClientItemId: item.clientItemId ?? null,
+        companyId: row.companyId,
+        type,
+        quantity,
+        unitPrice: cost,
+        occurredAt,
+        userId,
+        previousQuantity: before,
+        transferId,
+        transferCompanyId: other,
+      });
+      const after = stockAfter(before, { type, quantity });
+      db.runSync(
+        `UPDATE items SET quantityOnHand = ?, updatedAt = ?,
+           lastPurchasePrice = CASE WHEN ? = 'transfer_in' AND ? IS NOT NULL THEN ? ELSE lastPurchasePrice END
+         WHERE localId = ?`,
+        [after, now, type, cost, cost, item.localId]
+      );
+    }
+    insertOutboxOperation({
+      operationId: transferId,
+      userId,
+      companyId,
+      entityType: 'stock_transfer',
+      entityLocalId: transferId,
+      operationType: 'stock_transfer.create',
+      payload: {
+        transferId,
+        fromCompanyId: from.companyId,
+        toCompanyId: to.companyId,
+        fromItemId: source.id ?? undefined,
+        fromClientItemId: source.id ? undefined : source.clientItemId || source.localId,
+        toItemId: target.id ?? undefined,
+        toClientItemId: target.id ? undefined : target.clientItemId || target.localId,
+        quantity,
+        outClientTransactionId: from.clientTransactionId,
+        inClientTransactionId: to.clientTransactionId,
+        occurredAt,
+      },
+      createdAt: now,
+    });
+  });
+}
+
+// Both rows of a stock transfer.
+export function getLocalTransferRows(transferId) {
+  return db.getAllSync('SELECT * FROM stock_transactions WHERE transferId = ?', [transferId]);
 }
 
 export function getPendingOperations(userId, limit = 50) {
@@ -626,6 +763,23 @@ export function markOperationApplied(operationId, result) {
         result.serverId ?? null,
         operation.entityLocalId,
       ]);
+    } else if (operation.entityType === 'supplier_payment') {
+      db.runSync("UPDATE supplier_payments SET syncStatus = 'synced', id = COALESCE(?, id) WHERE clientPaymentId = ?", [
+        result.serverId ?? null,
+        operation.entityLocalId,
+      ]);
+    } else if (operation.entityType === 'stock_transfer') {
+      db.runSync("UPDATE stock_transactions SET syncStatus = 'synced', retryCount = 0, nextRetryAt = NULL WHERE transferId = ?", [
+        operation.entityLocalId,
+      ]);
+      // A receiving item this transfer created now has its server id.
+      if (result.toItemId) {
+        db.runSync(
+          `UPDATE items SET id = COALESCE(id, ?), syncStatus = CASE WHEN id IS NULL THEN 'synced' ELSE syncStatus END
+           WHERE localId = (SELECT itemLocalId FROM stock_transactions WHERE transferId = ? AND type = 'transfer_in')`,
+          [result.toItemId, operation.entityLocalId]
+        );
+      }
     } else if (operation.entityType === 'money_outflow' || operation.entityType === 'savings_goal') {
       const { table, key } = OUTFLOW_TABLES[operation.entityType];
       const remaining = db.getFirstSync('SELECT COUNT(*) AS count FROM outbox WHERE entityLocalId = ?', [operation.entityLocalId]);
@@ -665,6 +819,10 @@ export function markOperationFailed(operationId, errorMessage) {
     db.runSync("UPDATE items SET syncStatus = 'failed' WHERE localId = ?", [row.entityLocalId]);
   } else if (row.entityType === 'debt_payment') {
     db.runSync("UPDATE debt_payments SET syncStatus = 'failed' WHERE clientPaymentId = ?", [row.entityLocalId]);
+  } else if (row.entityType === 'supplier_payment') {
+    db.runSync("UPDATE supplier_payments SET syncStatus = 'failed' WHERE clientPaymentId = ?", [row.entityLocalId]);
+  } else if (row.entityType === 'stock_transfer') {
+    db.runSync("UPDATE stock_transactions SET syncStatus = 'failed' WHERE transferId = ?", [row.entityLocalId]);
   } else if (OUTFLOW_TABLES[row.entityType]) {
     const { table, key } = OUTFLOW_TABLES[row.entityType];
     db.runSync(`UPDATE ${table} SET syncStatus = 'failed' WHERE ${key} = ?`, [row.entityLocalId]);
@@ -706,8 +864,12 @@ export function hasPendingItemWork(localId, serverId) {
              json_extract(payload, '$.clientItemId') = ?
              OR json_extract(payload, '$.itemId') = ?
            ))
+        OR (entityType = 'stock_transfer' AND (
+             json_extract(payload, '$.fromClientItemId') = ? OR json_extract(payload, '$.toClientItemId') = ?
+             OR json_extract(payload, '$.fromItemId') = ? OR json_extract(payload, '$.toItemId') = ?
+           ))
      LIMIT 1`,
-    [localId, localId, serverId ?? null]
+    [localId, localId, serverId ?? null, localId, localId, serverId ?? null, serverId ?? null]
   );
   return !!row;
 }
@@ -718,8 +880,10 @@ export function getItemIdsWithPendingWork(userId) {
     `SELECT localId FROM items
      WHERE localId IN (SELECT entityLocalId FROM outbox WHERE userId = ? AND entityType = 'item')
         OR localId IN (SELECT json_extract(payload, '$.clientItemId') FROM outbox WHERE userId = ? AND entityType = 'stock_transaction')
-        OR id IN (SELECT json_extract(payload, '$.itemId') FROM outbox WHERE userId = ? AND entityType = 'stock_transaction')`,
-    [userId, userId, userId]
+        OR id IN (SELECT json_extract(payload, '$.itemId') FROM outbox WHERE userId = ? AND entityType = 'stock_transaction')
+        OR localId IN (SELECT itemLocalId FROM stock_transactions WHERE transferId IN
+             (SELECT entityLocalId FROM outbox WHERE userId = ? AND entityType = 'stock_transfer'))`,
+    [userId, userId, userId, userId]
   );
   return new Set(rows.map((r) => r.localId));
 }
@@ -753,7 +917,7 @@ export function getSyncStatusSummary(userId) {
 export function clearLocalData() {
   db.execSync(
     'DELETE FROM outbox; DELETE FROM items; DELETE FROM stock_transactions; DELETE FROM companies; ' +
-    'DELETE FROM deferred_changes; DELETE FROM api_cache; DELETE FROM debt_payments; ' +
+    'DELETE FROM deferred_changes; DELETE FROM api_cache; DELETE FROM debt_payments; DELETE FROM supplier_payments; ' +
     'DELETE FROM money_outflows; DELETE FROM savings_goals; ' +
     "DELETE FROM sync_meta WHERE key <> 'schemaVersion';"
   );
@@ -777,8 +941,8 @@ export function upsertPulledTransaction(tx, userId) {
     `INSERT INTO stock_transactions
        (clientTransactionId, id, itemLocalId, itemServerId, companyId, type, quantity, unitPrice, priceWasDefaulted,
         previousQuantity, occurredAt, syncStatus, userId, createdByUserId, paymentMethod, amountPaid, customerName, customerPhone, saleId,
-        paymentBreakdown, returnOf, returnReason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        paymentBreakdown, returnOf, returnReason, supplierName, supplierPhone, expiryDate, transferId, transferCompanyId)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(clientTransactionId) DO UPDATE SET
        id = excluded.id, itemServerId = excluded.itemServerId, companyId = excluded.companyId, type = excluded.type,
        quantity = excluded.quantity, unitPrice = excluded.unitPrice, priceWasDefaulted = excluded.priceWasDefaulted,
@@ -786,7 +950,8 @@ export function upsertPulledTransaction(tx, userId) {
        createdByUserId = excluded.createdByUserId, paymentMethod = excluded.paymentMethod,
        amountPaid = excluded.amountPaid, customerName = excluded.customerName, customerPhone = excluded.customerPhone,
        saleId = excluded.saleId, paymentBreakdown = excluded.paymentBreakdown, returnOf = excluded.returnOf,
-       returnReason = excluded.returnReason`,
+       returnReason = excluded.returnReason, supplierName = excluded.supplierName, supplierPhone = excluded.supplierPhone,
+       expiryDate = excluded.expiryDate, transferId = excluded.transferId, transferCompanyId = excluded.transferCompanyId`,
     [
       tx.clientTransactionId,
       tx.id,
@@ -809,6 +974,11 @@ export function upsertPulledTransaction(tx, userId) {
       tx.paymentBreakdown ? JSON.stringify(tx.paymentBreakdown) : null,
       tx.returnOf ?? null,
       tx.returnReason ?? null,
+      tx.supplierName ?? null,
+      tx.supplierPhone ?? null,
+      tx.expiryDate ? String(tx.expiryDate).slice(0, 10) : null,
+      tx.transferId ?? null,
+      tx.transferCompanyId ?? null,
     ]
   );
 }
@@ -935,6 +1105,57 @@ export function getLocalDebtPayments(companyIds) {
   return db.getAllSync(`SELECT * FROM debt_payments WHERE companyId IN (${marks})`, companyIds);
 }
 
+// --- Supplier payments ---
+
+// Money paid to a supplier against what the company owes them. Saved on the device first (works
+// offline) with its outbox operation, like a customer's repayment.
+export function saveLocalSupplierPayment(payment) {
+  const record = { ...payment, supplierPhone: normalizePhone(payment.supplierPhone), supplierName: payment.supplierName.trim() };
+  return runLocalTransaction(() => {
+    db.runSync(
+      `INSERT INTO supplier_payments
+         (clientPaymentId, companyId, supplierName, supplierPhone, amount, paymentMethod, occurredAt, syncStatus, userId, createdByUserId)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      [record.clientPaymentId, record.companyId, record.supplierName, record.supplierPhone, record.amount, record.paymentMethod, record.occurredAt, record.userId, record.userId]
+    );
+    insertOutboxOperation({
+      operationId: record.clientPaymentId,
+      userId: record.userId,
+      companyId: record.companyId,
+      entityType: 'supplier_payment',
+      entityLocalId: record.clientPaymentId,
+      operationType: 'supplier_payment.create',
+      payload: {
+        clientPaymentId: record.clientPaymentId,
+        supplierName: record.supplierName,
+        supplierPhone: record.supplierPhone,
+        amount: record.amount,
+        paymentMethod: record.paymentMethod,
+        occurredAt: record.occurredAt,
+      },
+    });
+  });
+}
+
+export function upsertPulledSupplierPayment(p, userId) {
+  db.runSync(
+    `INSERT INTO supplier_payments
+       (clientPaymentId, id, companyId, supplierName, supplierPhone, amount, paymentMethod, occurredAt, syncStatus, userId, createdByUserId)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
+     ON CONFLICT(clientPaymentId) DO UPDATE SET
+       id = excluded.id, companyId = excluded.companyId, supplierName = excluded.supplierName,
+       supplierPhone = excluded.supplierPhone, amount = excluded.amount, paymentMethod = excluded.paymentMethod,
+       occurredAt = excluded.occurredAt, syncStatus = 'synced', createdByUserId = excluded.createdByUserId`,
+    [p.clientPaymentId, p.id, p.companyId, p.supplierName, p.supplierPhone, Number(p.amount), p.paymentMethod, p.occurredAt, userId, p.userId ?? null]
+  );
+}
+
+export function getLocalSupplierPayments(companyIds) {
+  if (!companyIds.length) return [];
+  const marks = companyIds.map(() => '?').join(',');
+  return db.getAllSync(`SELECT * FROM supplier_payments WHERE companyId IN (${marks})`, companyIds);
+}
+
 // --- Money out and savings goals ---
 
 const OUTFLOW_TABLES = {
@@ -962,10 +1183,11 @@ export function saveLocalOutflow(outflow, { newGoal } = {}) {
     db.runSync(
       `INSERT INTO money_outflows
          (clientOutflowId, companyId, kind, category, clientGoalId, amount, paymentMethod, note, repeatsMonthly,
-          occurredAt, syncStatus, userId, createdByUserId)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+          occurredAt, syncStatus, userId, createdByUserId, receiptUri, receiptPending)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
       [record.clientOutflowId, record.companyId, record.kind, record.category, record.clientGoalId, record.amount,
-        record.paymentMethod, record.note, record.repeatsMonthly ? 1 : 0, record.occurredAt, record.userId, record.userId]
+        record.paymentMethod, record.note, record.repeatsMonthly ? 1 : 0, record.occurredAt, record.userId, record.userId,
+        record.receiptUri || null, record.receiptUri ? 1 : 0]
     );
     insertOutboxOperation({
       operationId: record.clientOutflowId,
@@ -987,6 +1209,29 @@ export function saveLocalOutflow(outflow, { newGoal } = {}) {
       },
     });
   });
+}
+
+// A receipt photo added to an entry after it was recorded (copied into the app's own files first).
+// It's uploaded on the next sync, once the entry itself is on the server.
+export function setLocalOutflowReceipt(clientOutflowId, receiptUri) {
+  db.runSync('UPDATE money_outflows SET receiptUri = ?, receiptPending = 1 WHERE clientOutflowId = ?', [receiptUri, clientOutflowId]);
+}
+
+// Photos waiting to upload whose entry has synced (the server needs the entry first).
+export function getPendingReceipts(userId) {
+  return db.getAllSync(
+    `SELECT clientOutflowId, receiptUri FROM money_outflows
+     WHERE receiptPending = 1 AND receiptUri IS NOT NULL AND userId = ?
+       AND clientOutflowId NOT IN (SELECT entityLocalId FROM outbox WHERE entityType = 'money_outflow' AND operationType = 'money_outflow.create')`,
+    [userId]
+  );
+}
+
+export function markReceiptUploaded(clientOutflowId, mimeType) {
+  db.runSync('UPDATE money_outflows SET receiptPending = 0, receiptMimeType = COALESCE(?, receiptMimeType) WHERE clientOutflowId = ?', [
+    mimeType ?? null,
+    clientOutflowId,
+  ]);
 }
 
 // Admin edits after the fact: stop a monthly repeat, or delete a mistaken entry.
@@ -1066,15 +1311,15 @@ export function upsertPulledOutflow(o, userId, { deleted = false } = {}) {
   db.runSync(
     `INSERT INTO money_outflows
        (clientOutflowId, id, companyId, kind, category, clientGoalId, amount, paymentMethod, note, repeatsMonthly,
-        occurredAt, syncStatus, userId, createdByUserId)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
+        occurredAt, syncStatus, userId, createdByUserId, receiptMimeType)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?, ?)
      ON CONFLICT(clientOutflowId) DO UPDATE SET
        id = excluded.id, companyId = excluded.companyId, kind = excluded.kind, category = excluded.category,
        clientGoalId = excluded.clientGoalId, amount = excluded.amount, paymentMethod = excluded.paymentMethod,
        note = excluded.note, repeatsMonthly = excluded.repeatsMonthly, occurredAt = excluded.occurredAt,
-       syncStatus = 'synced', createdByUserId = excluded.createdByUserId`,
+       syncStatus = 'synced', createdByUserId = excluded.createdByUserId, receiptMimeType = excluded.receiptMimeType`,
     [o.clientOutflowId, o.id, o.companyId, o.kind, o.category ?? null, o.clientGoalId ?? null, Number(o.amount), o.paymentMethod,
-      o.note ?? null, o.repeatsMonthly ? 1 : 0, o.occurredAt, userId, o.userId ?? null]
+      o.note ?? null, o.repeatsMonthly ? 1 : 0, o.occurredAt, userId, o.userId ?? null, o.receiptMimeType ?? null]
   );
 }
 

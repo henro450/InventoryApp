@@ -1,4 +1,4 @@
-import { formatNumber } from './format';
+import { hasPacks, toUnits, perUnitPrice, formatStock } from './pack';
 
 // Maths for a sale of several items (StockTransactionScreen, stock out). Each line keeps the
 // single-item rules: quantity is checked against that item's stock on hand, and a blank price
@@ -19,20 +19,22 @@ export function defaultSalePrice(item) {
   return { price: null, atCost: false };
 }
 
-// line = { item, quantity: '6', unitPrice: '' } (inputs as typed)
+// line = { item, quantity: '6', unitPrice: '', inPacks: false } (inputs as typed). With inPacks
+// the quantity and typed price are per pack; qty and price come back per unit, as saved.
 export function lineCalc(line) {
   const { item } = line;
-  const qty = Number(line.quantity) || 0;
+  const inPacks = !!line.inPacks && hasPacks(item);
+  const qty = toUnits(line.quantity, item, inPacks);
   const typed = String(line.unitPrice ?? '').trim() !== '';
   const fallback = defaultSalePrice(item);
-  const price = typed ? Number(line.unitPrice) : fallback.price;
+  const price = typed ? perUnitPrice(line.unitPrice, item, inPacks) : fallback.price;
   // Only a fall-back to the purchase price is "defaulted" (shown as recorded at cost).
   const priceWasDefaulted = !typed && fallback.atCost;
   const total = price !== null && qty > 0 ? roundMoney(qty * price) : null;
   const onHand = Number(item.quantityOnHand) || 0;
   let error = null;
   if (onHand <= 0) error = 'Out of stock. Remove this item or record a stock-in first.';
-  else if (qty > onHand) error = `Only ${formatNumber(onHand)} ${item.unit} available`;
+  else if (qty > onHand) error = `Only ${formatStock(onHand, item)} available`;
   else if (qty <= 0) error = 'Enter a quantity';
   // The item's "Allow decimal" setting can change (e.g. by a sync) while the sale is open.
   else if (!item.allowDecimal && !Number.isInteger(qty)) error = `${item.name} is sold in whole ${item.unit}. Enter a whole number.`;

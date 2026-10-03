@@ -6,7 +6,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { saveLocalStockTransaction, saveLocalSale, getLocalItemByLocalId, getLocalItems } from '../db/localDb';
 import { useAuth } from '../context/AuthContext';
 import { runSync } from '../sync/syncEngine';
-import { formatMoney, formatNumber, quantityStep } from '../utils/format';
+import { formatMoney, formatNumber, quantityStep, dateToYmd } from '../utils/format';
 import { saleTotals, splitAmountPaid, splitBreakdown } from '../utils/sale';
 import { breakdownFromInputs, splitProblem } from '../utils/payments';
 import { saleKey } from '../reports/salesMath';
@@ -14,7 +14,9 @@ import Icon from '../components/Icon';
 import SalePayment, { amountPaidInputFor } from '../components/SalePayment';
 import AddSaleItemsSheet from '../components/AddSaleItemsSheet';
 import SaleLines from '../components/SaleLines';
-import { Text, Screen, NavHeader, Card, Divider, Segmented, Stepper, Field, Note, Stat, BottomBar, Button, Banner } from '../components/ui';
+import PurchasePayment, { purchaseAmounts } from '../components/PurchasePayment';
+import { hasPacks, toUnits, perUnitPrice, packLabel, formatStock, unitOptions } from '../utils/pack';
+import { Text, Screen, NavHeader, Card, Divider, Segmented, Stepper, Field, Note, Stat, BottomBar, Button, Banner, DateField } from '../components/ui';
 import { colors, fonts, type as typo } from '../theme';
 
 const TYPES = [
@@ -49,6 +51,12 @@ export default function StockTransactionScreen({ route, navigation }) {
   const [type, setType] = useState('out'); // default to recording a sale
   const [quantity, setQuantity] = useState('');
   const [unitPrice, setUnitPrice] = useState('');
+  // Stock in: entered in the item's unit or in packs, how the supplier was paid, and expiry.
+  const [unitMode, setUnitMode] = useState('unit'); // 'unit' | 'pack'
+  const [purchaseMode, setPurchaseMode] = useState('full'); // 'full' | 'part' | 'credit'
+  const [purchasePaidInput, setPurchasePaidInput] = useState('');
+  const [supplier, setSupplier] = useState(null); // { name, phone }
+  const [expiryDate, setExpiryDate] = useState(''); // 'YYYY-MM-DD' or ''
 
   // Sale (stock out) state: the items in the sale and the payment for the whole sale.
   const [lines, setLines] = useState(() => [newLine(route.params.item)]);
@@ -101,7 +109,10 @@ export default function StockTransactionScreen({ route, navigation }) {
       alertBlocked();
       return;
     }
-    const qty = Number(quantity);
+    const current = getLocalItemByLocalId(item.localId) || item;
+    setItem(current);
+    const inPacks = type === 'in' && unitMode === 'pack' && hasPacks(current);
+    const qty = toUnits(quantity, current, inPacks);
     if (!qty || qty <= 0) {
       Alert.alert('Invalid quantity', 'Please enter a quantity greater than zero.');
       return;
@@ -110,9 +121,16 @@ export default function StockTransactionScreen({ route, navigation }) {
       Alert.alert('Price required', 'Please enter the purchase price for this stock-in.');
       return;
     }
-
-    const current = getLocalItemByLocalId(item.localId) || item;
-    setItem(current);
+    const price = type === 'in' ? perUnitPrice(unitPrice, current, inPacks) : null;
+    const purchase = type === 'in' ? purchaseAmounts(purchaseMode, purchasePaidInput, Math.round(qty * price * 100) / 100) : null;
+    if (purchase?.problem) {
+      Alert.alert('Check the payment', purchase.problem);
+      return;
+    }
+    if (purchase && purchase.owed > 0 && !supplier) {
+      Alert.alert('Who supplied it?', `You will owe ${formatMoney(purchase.owed)}. Choose the supplier before saving.`);
+      return;
+    }
     if (!current.allowDecimal && !Number.isInteger(qty)) {
       Alert.alert('Whole numbers only', `${current.name} is counted in whole ${current.unit}. Turn on "Allow decimal quantities" on the item to record ${formatNumber(qty)}.`);
       return;
@@ -126,9 +144,12 @@ export default function StockTransactionScreen({ route, navigation }) {
       companyId: user.companyId,
       type,
       quantity: qty,
-      unitPrice: type === 'in' ? Number(unitPrice) : null,
+      unitPrice: price,
       paymentMethod: null,
-      amountPaid: null,
+      amountPaid: purchase ? purchase.amountPaid : null,
+      supplierName: type === 'in' && supplier ? supplier.name : null,
+      supplierPhone: type === 'in' && supplier ? supplier.phone : null,
+      expiryDate: type === 'in' && expiryDate ? expiryDate : null,
       customerName: null,
       customerPhone: null,
       priceWasDefaulted: false,
@@ -362,10 +383,12 @@ export default function StockTransactionScreen({ route, navigation }) {
   }
 
   // Live preview of what saving will do, mirroring the quantity logic above.
-  const qty = Number(quantity) || 0;
-  const previewQty = type === 'in' ? item.quantityOnHand + qty : quantity === '' ? item.quantityOnHand : qty;
-  const previewPrice = type === 'in' && unitPrice.trim() !== '' ? Number(unitPrice) : null;
-  const previewTotal = previewPrice != null && qty > 0 ? previewPrice * qty : null;
+  const packs = type === 'in' && hasPacks(item);
+  const inPacks = packs && unitMode === 'pack';
+  const qty = toUnits(quantity, item, inPacks);
+  const previewQty = type === 'in' ? Number(item.quantityOnHand) + qty : quantity === '' ? item.quantityOnHand : qty;
+  const previewPrice = type === 'in' && unitPrice.trim() !== '' ? perUnitPrice(unitPrice, item, inPacks) : null;
+  const previewTotal = previewPrice != null && qty > 0 ? Math.round(previewPrice * qty * 100) / 100 : null;
 
   return (
     <Screen>
@@ -387,30 +410,62 @@ export default function StockTransactionScreen({ route, navigation }) {
             </View>
             <Divider />
             <View style={{ flexDirection: 'row', gap: 12 }}>
-              <Stat label="On hand" value={`${formatNumber(item.quantityOnHand)} ${item.unit}`} />
+              <Stat label="On hand" value={formatStock(item.quantityOnHand, item)} />
               <Stat label="Last purchase price" value={hasDefault ? formatMoney(defaultedPriceValue) : '—'} />
             </View>
           </Card>
 
           {typePicker}
 
+          {packs && (
+            <View style={{ gap: 8 }}>
+              <Text style={typo.label}>Counted in</Text>
+              <Segmented accessibilityLabel="Unit received" options={unitOptions(item)} value={unitMode} onChange={setUnitMode} />
+            </View>
+          )}
+
           <Stepper
             big
-            label={type === 'adjustment' ? 'New counted quantity' : 'Quantity received'}
+            label={type === 'adjustment' ? `New counted quantity (${item.unit})` : inPacks ? `${packLabel(item, 2)} received` : 'Quantity received'}
             value={quantity}
             onChange={setQuantity}
-            decimal={!!item.allowDecimal}
-            step={quantityStep(item)}
+            decimal={!!item.allowDecimal && !inPacks}
+            step={inPacks ? 1 : quantityStep(item)}
           />
+          {inPacks && qty > 0 && <Text style={[typo.caption, { marginTop: -10 }]}>= {formatNumber(qty)} {item.unit}</Text>}
 
           {type === 'in' && (
             <Field
-              label="Purchase price per unit"
+              label={inPacks ? `Purchase price per ${packLabel(item)}` : 'Purchase price per unit'}
               prefix="₦"
               keyboardType="decimal-pad"
               value={unitPrice}
               onChangeText={setUnitPrice}
               placeholder="0.00"
+              hint={inPacks && previewPrice != null ? `${formatMoney(previewPrice)} per ${item.unit}` : undefined}
+            />
+          )}
+
+          {type === 'in' && (
+            <DateField
+              label="Expiry date (optional)"
+              value={expiryDate}
+              onChange={setExpiryDate}
+              placeholder="No expiry date"
+              minimumDate={dateToYmd(new Date())}
+            />
+          )}
+
+          {type === 'in' && (
+            <PurchasePayment
+              companyId={user.companyId}
+              total={previewTotal ?? 0}
+              mode={purchaseMode}
+              onModeChange={setPurchaseMode}
+              partInput={purchasePaidInput}
+              onPartInputChange={setPurchasePaidInput}
+              supplier={supplier}
+              onSupplierChange={setSupplier}
             />
           )}
 
@@ -419,7 +474,7 @@ export default function StockTransactionScreen({ route, navigation }) {
           )}
 
           <View style={{ flexDirection: 'row', gap: 12 }}>
-            <Stat label="Stock after" value={`${formatNumber(previewQty)} ${item.unit}`} />
+            <Stat label="Stock after" value={formatStock(previewQty, item)} />
             {previewTotal != null && <Stat align="right" label="Purchase total" value={formatMoney(previewTotal)} />}
           </View>
         </ScrollView>

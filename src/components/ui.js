@@ -150,6 +150,7 @@ export function AccountButton({ user, onLogout }) {
             onPress={() => go('MoneyOut')}
           />
         )}
+        {!isSuperAdmin && <Button title="Suppliers" variant="secondary" icon="truck" height={48} onPress={() => go('Suppliers')} />}
         {isCompanyAdmin && !isSuperAdmin && (
           <View style={{ gap: 10 }}>
             <Button title="Savings" variant="secondary" icon="piggy" height={48} onPress={() => go('Savings')} />

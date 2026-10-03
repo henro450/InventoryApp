@@ -15,12 +15,14 @@ import {
   deletePulledTransaction,
   upsertLocalCompany,
   upsertPulledDebtPayment,
+  upsertPulledSupplierPayment,
   upsertPulledOutflow,
   upsertPulledSavingsGoal,
   deferItemChange,
   getDeferredChanges,
   removeDeferredChange,
 } from '../db/localDb';
+import { uploadPendingReceipts } from '../utils/receiptPhotos';
 
 let syncInProgress = false;
 
@@ -65,6 +67,8 @@ function applyItemChange(operation, item, userId) {
     allowDecimal: !!item.allowDecimal,
     lastPurchasePrice: item.lastPurchasePrice,
     sellingPrice: item.sellingPrice,
+    packSize: item.packSize,
+    packName: item.packName,
     version: item.version,
     updatedAt: item.updatedAt,
     syncStatus: 'synced',
@@ -73,8 +77,8 @@ function applyItemChange(operation, item, userId) {
   });
 }
 
-// The feed carries companies, items, stock transactions, debt repayments, money out and savings
-// goals for every company this user can see. All are kept so reports, debtors, alerts, and the
+// The feed carries companies, items, stock transactions (including transfers between branches),
+// customer repayments, supplier payments, money out and savings goals for every company this user can see. All are kept so reports, debtors, alerts, and the
 // dashboard can be computed on the device.
 function applyChange(change, userId) {
   if (!change.data) return;
@@ -82,6 +86,8 @@ function applyChange(change, userId) {
     upsertLocalCompany(change.data, { deleted: change.operation === 'delete' });
   } else if (change.entityType === 'debt_payment') {
     upsertPulledDebtPayment(change.data, userId);
+  } else if (change.entityType === 'supplier_payment') {
+    upsertPulledSupplierPayment(change.data, userId);
   } else if (change.entityType === 'money_outflow') {
     upsertPulledOutflow(change.data, userId, { deleted: change.operation === 'delete' });
   } else if (change.entityType === 'savings_goal') {
@@ -152,6 +158,9 @@ export async function runSync(userId) {
         }
       }
     }
+
+    // Receipt photos go up once their money-out entry is on the server.
+    operationsSynced += await uploadPendingReceipts(userId);
 
     let cursor = getSyncCursor(userId);
     let pulledChanges = 0;

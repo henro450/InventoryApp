@@ -4,17 +4,18 @@ import Swipeable from 'react-native-gesture-handler/Swipeable';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '../context/AuthContext';
-import { getLocalItems, getSyncStatusSummary, saveLocalItem, deleteLocalItem, getLastSyncedAt, getItemIdsWithPendingWork } from '../db/localDb';
+import { getLocalItems, getLocalSubCompanies, getSyncStatusSummary, saveLocalItem, deleteLocalItem, getLastSyncedAt, getItemIdsWithPendingWork } from '../db/localDb';
 import { useLocalRefresh } from '../hooks/useLocalRefresh';
 import { runSync } from '../sync/syncEngine';
 import { isLowStock } from '../utils/inventory';
 import { exportCsv, pickAndParseCsv } from '../utils/csvExport';
 import { startScanToFind } from '../utils/scan';
+import { hasPacks, formatStock } from '../utils/pack';
 import { formatNumber, formatTime, lastSyncedLabel, plural, timeAgo } from '../utils/format';
 import Icon from '../components/Icon';
 import {
   Text, Screen, LargeHeader, NavHeader, IconButton, AccountButton, SearchField, Chip, Pill, Banner, EmptyState,
-  CompanySwitcher, ReadOnlyBanner,
+  CompanySwitcher, ReadOnlyBanner, Button,
 } from '../components/ui';
 import { colors, fonts, type, shadow } from '../theme';
 
@@ -26,7 +27,16 @@ const CATALOG_COLUMNS = [
   { key: 'sellingPrice', label: 'Selling Price' },
   { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
   { key: 'allowDecimal', label: 'Allow Decimal' },
+  { key: 'packSize', label: 'Pack Size' },
+  { key: 'packName', label: 'Pack Name' },
 ];
+
+// "Pack Size" 24 + "Pack Name" carton = sold in cartons of 24. Blank or under 2 = no packs.
+function packFromCsv(row) {
+  const size = Number(String(row['Pack Size'] ?? row.packSize ?? '').trim());
+  if (!Number.isInteger(size) || size < 2) return { packSize: null, packName: null };
+  return { packSize: size, packName: String(row['Pack Name'] ?? row.packName ?? '').trim().slice(0, 40) || 'pack' };
+}
 
 // A CSV "Selling Price" cell: blank or not a price = no selling price. "1,500" reads as 1500.
 function sellingPriceFromCsv(value) {
@@ -89,9 +99,13 @@ export default function InventoryScreen({ navigation, route }) {
     ]);
   }
 
+  // Main company admins with at least one branch can move stock between them.
+  const canTransfer = isMainCompany && isCompanyAdmin && getLocalSubCompanies(user.companyId).some((c) => c.isActive);
+
   function handleMore(item) {
     Alert.alert(item.name, `${item.sku}${item.category ? ` · ${item.category}` : ''}`, [
       { text: 'Record transaction', onPress: () => navigation.navigate('StockTransaction', { item }) },
+      ...(canTransfer && Number(item.quantityOnHand) > 0 ? [{ text: 'Move to another branch', onPress: () => navigation.navigate('TransferStock', { item }) }] : []),
       { text: 'Edit item', onPress: () => handleEdit(item) },
       { text: 'Deactivate', style: 'destructive', onPress: () => handleDeactivate(item) },
       { text: 'Cancel', style: 'cancel' },
@@ -143,6 +157,7 @@ export default function InventoryScreen({ navigation, route }) {
         lowStockThreshold: Number(row['Low Stock Threshold'] || row.lowStockThreshold || 0) || 0,
         allowDecimal: /^(yes|y|true|1)$/i.test(String(row['Allow Decimal'] ?? row.allowDecimal ?? '').trim()),
         sellingPrice: sellingPriceFromCsv(row['Selling Price'] ?? row.sellingPrice),
+        ...packFromCsv(row),
         lastPurchasePrice: null,
         updatedAt: new Date().toISOString(),
         syncStatus: 'pending',
@@ -183,6 +198,7 @@ export default function InventoryScreen({ navigation, route }) {
       title="Inventory"
       right={
         <>
+          {canManageItems && <IconButton icon="clipboard" label="Count stock" onPress={() => navigation.navigate('StockCount')} />}
           {canManageItems && <IconButton icon="upload" label="Import catalog from CSV" onPress={handleImportCatalog} />}
           <IconButton icon="download" label="Export catalog as CSV" onPress={handleExportCatalog} />
           <AccountButton user={user} onLogout={logout} />
@@ -198,6 +214,15 @@ export default function InventoryScreen({ navigation, route }) {
       <View style={styles.readOnlyWrap}>
         <ReadOnlyBanner subtitle={lastSyncedLabel(lastSynced)} />
         <CompanySwitcher active="inventory" params={companyParams} />
+        {canTransfer && (
+          <Button
+            title="Move stock from this branch"
+            variant="secondary"
+            icon="swap"
+            height={44}
+            onPress={() => navigation.navigate('TransferStock', { companyId: viewingCompanyId })}
+          />
+        )}
       </View>
     </>
   );
@@ -345,6 +370,11 @@ function ItemRow({ item, editable, canManage, onPress, onEdit, onDeactivate, onM
       <View style={styles.qtyCol}>
         <Text style={[styles.qty, low && { color: colors.danger }]}>{formatNumber(item.quantityOnHand)}</Text>
         <Text style={type.caption}>{item.unit}</Text>
+        {hasPacks(item) && Number(item.quantityOnHand) >= Number(item.packSize) && (
+          <Text style={type.caption} numberOfLines={1}>
+            {formatStock(item.quantityOnHand, item)}
+          </Text>
+        )}
       </View>
       {canManage && <IconButton icon="more" label={`More actions for ${item.name}`} variant="ghost" size={36} onPress={onMore} />}
     </Pressable>

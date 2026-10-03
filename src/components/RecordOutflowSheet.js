@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { View, Pressable, StyleSheet } from 'react-native';
+import { View, Pressable, Image, StyleSheet, Alert } from 'react-native';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 import Icon from './Icon';
 import { Text, Sheet, Button, Field, Chip, Segmented, DateField, Checkbox, Note } from './ui';
 import { saveLocalOutflow } from '../db/localDb';
+import { chooseReceiptPhoto, keepReceiptPhoto } from '../utils/receiptPhotos';
 import { OUTFLOW_KINDS } from '../reports/outflowMath';
 import { KIND_META, PAYMENT_METHODS } from '../utils/outflows';
 import { dateToYmd, formatMoney, ymdToDate } from '../utils/format';
@@ -29,6 +30,8 @@ export default function RecordOutflowSheet({ visible, onClose, onSaved, user, is
   const [note, setNote] = useState('');
   const [repeats, setRepeats] = useState(false);
   const [errors, setErrors] = useState({});
+  const [receipt, setReceipt] = useState(null); // { uri } of a picked photo, kept on save
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -42,6 +45,8 @@ export default function RecordOutflowSheet({ visible, onClose, onSaved, user, is
     setGoalName('');
     setGoalTarget('');
     setErrors({});
+    setReceipt(null);
+    setSaving(false);
     pickDefaultChoice(start, initial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
@@ -86,7 +91,13 @@ export default function RecordOutflowSheet({ visible, onClose, onSaved, user, is
   const category = kind === 'savings' ? null : choice === OTHER ? custom.trim() : choice;
   const canRepeat = kind === 'expense' || kind === 'loan' || kind === 'tax';
 
-  function save() {
+  async function addReceipt() {
+    const picked = await chooseReceiptPhoto();
+    if (picked) setReceipt(picked);
+  }
+
+  async function save() {
+    if (saving) return;
     const next = {};
     if (!Number.isFinite(value) || value <= 0) next.amount = 'Enter an amount greater than zero.';
     if (kind === 'expense' && !category) next.category = 'Pick what the expense was for.';
@@ -102,9 +113,22 @@ export default function RecordOutflowSheet({ visible, onClose, onSaved, user, is
     const newGoal = kind === 'savings' && choice === NEW_GOAL
       ? { clientGoalId: uuidv4(), companyId: user.companyId, userId: user.id, name: goalName.trim(), targetAmount: goalTarget ? Number(goalTarget) : null }
       : null;
+    const clientOutflowId = uuidv4();
+    let receiptUri = null;
+    if (receipt) {
+      setSaving(true);
+      try {
+        receiptUri = await keepReceiptPhoto(receipt.uri, clientOutflowId);
+      } catch (err) {
+        setSaving(false);
+        Alert.alert("Couldn't keep the photo", `${err.message}\n\nRemove the photo to save without it.`);
+        return;
+      }
+    }
     saveLocalOutflow(
       {
-        clientOutflowId: uuidv4(),
+        clientOutflowId,
+        receiptUri,
         companyId: user.companyId,
         userId: user.id,
         kind,
@@ -129,7 +153,7 @@ export default function RecordOutflowSheet({ visible, onClose, onSaved, user, is
       visible={visible}
       onClose={onClose}
       title={isCompanyAdmin ? 'Record money out' : 'Record an expense'}
-      footer={<Button title={buttonLabel} icon="check" style={{ flex: 1 }} onPress={save} />}
+      footer={<Button title={buttonLabel} icon="check" style={{ flex: 1 }} onPress={save} loading={saving} />}
     >
       {kinds.length > 1 && (
         <View style={{ gap: 8 }}>
@@ -208,6 +232,23 @@ export default function RecordOutflowSheet({ visible, onClose, onSaved, user, is
         <Segmented accessibilityLabel="Paid with" options={PAYMENT_METHODS} value={method} onChange={setMethod} />
       </View>
       <DateField label="Date" value={date} onChange={setDate} maximumDate={dateToYmd(new Date())} />
+      <View style={{ gap: 8 }}>
+        <Text style={type.label}>
+          Receipt photo <Text style={type.caption}>(optional)</Text>
+        </Text>
+        {receipt ? (
+          <View style={styles.receiptRow}>
+            <Image source={{ uri: receipt.uri }} style={styles.receiptThumb} accessibilityLabel="Receipt photo" />
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={type.bodyStrong}>Photo added</Text>
+              <Text style={type.caption}>Uploaded when this entry syncs.</Text>
+            </View>
+            <Button title="Remove" variant="ghost" height={36} onPress={() => setReceipt(null)} />
+          </View>
+        ) : (
+          <Button title="Add receipt photo" variant="secondary" icon="camera" height={46} onPress={addReceipt} />
+        )}
+      </View>
       <Field label="Note" optional placeholder="e.g. 25 litres for the shop generator" value={note} onChangeText={setNote} maxLength={500} />
       {canRepeat && (
         <Checkbox
@@ -229,5 +270,10 @@ const styles = StyleSheet.create({
   },
   kindText: { fontFamily: fonts.semibold, fontSize: 12.5, color: colors.ink2 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  receiptRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, padding: 10, borderRadius: 14, borderWidth: 1, borderColor: colors.line,
+    backgroundColor: colors.surface,
+  },
+  receiptThumb: { width: 52, height: 52, borderRadius: 10, backgroundColor: colors.surfaceMuted },
   error: { fontSize: 12, color: colors.danger, fontFamily: fonts.medium },
 });

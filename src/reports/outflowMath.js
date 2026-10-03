@@ -1,5 +1,6 @@
 // Money out: everything that leaves the business, computed on the device from stock purchases
-// (stock_transactions 'in') plus the money_outflows table. Pure functions over plain arrays, like
+// (stock_transactions 'in': what was paid at the time) and later payments to suppliers for stock
+// bought on credit, plus the money_outflows table. Pure functions over plain arrays, like
 // reportMath.js, but with no server twin yet.
 //
 // Savings are kept apart from spending: a deposit leaves the till but still belongs to the
@@ -20,14 +21,16 @@ function inRange(row, { from, to } = {}) {
   return true;
 }
 
-// One list of everything that went out, newest first: stock purchases (marked auto) and recorded
-// outflows, including savings deposits and withdrawals from savings.
-export function outflowEntries(transactions, outflows, companyIds, range = {}, itemsByLocalId = new Map()) {
+// One list of everything that went out, newest first: stock purchases and supplier payments
+// (marked auto) and recorded outflows, including savings deposits and withdrawals from savings.
+// A purchase counts what was paid when the stock came in; the rest goes out when the supplier is paid.
+export function outflowEntries(transactions, outflows, companyIds, range = {}, itemsByLocalId = new Map(), supplierPayments = []) {
   const ids = new Set(companyIds);
   const entries = [];
   for (const tx of transactions) {
     if (tx.type !== 'in' || !ids.has(tx.companyId) || !inRange(tx, range)) continue;
-    const amount = num(tx.quantity) * num(tx.unitPrice);
+    const total = num(tx.quantity) * num(tx.unitPrice);
+    const amount = tx.amountPaid === null || tx.amountPaid === undefined ? total : num(tx.amountPaid);
     if (amount <= 0) continue;
     const item = itemsByLocalId.get(tx.itemLocalId);
     entries.push({
@@ -36,10 +39,25 @@ export function outflowEntries(transactions, outflows, companyIds, range = {}, i
       auto: true,
       title: item ? `${item.name} × ${num(tx.quantity)}` : 'Stock bought',
       amount,
+      owed: Math.max(0, total - amount),
       occurredAt: tx.occurredAt,
       companyId: tx.companyId,
       createdByUserId: tx.createdByUserId ?? tx.userId,
       syncStatus: tx.syncStatus,
+    });
+  }
+  for (const p of supplierPayments) {
+    if (!ids.has(p.companyId) || !inRange(p, range)) continue;
+    entries.push({
+      key: `sp-${p.clientPaymentId}`,
+      kind: 'stock',
+      auto: true,
+      title: `Paid ${p.supplierName}`,
+      amount: num(p.amount),
+      occurredAt: p.occurredAt,
+      companyId: p.companyId,
+      createdByUserId: p.createdByUserId ?? p.userId,
+      syncStatus: p.syncStatus,
     });
   }
   for (const o of outflows) {

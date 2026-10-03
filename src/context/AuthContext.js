@@ -16,6 +16,7 @@ import {
   turnOffFingerprint as turnOffStoredFingerprint,
 } from '../auth/biometrics';
 import { clearSubscriptionReminders } from '../subscription/reminders';
+import { clearStockWarnings } from '../notifications/stockWarnings';
 
 // AUTH-02: token is cached locally (SecureStore) so the user stays logged in and can keep
 // using the app offline after the first successful login.
@@ -173,6 +174,7 @@ export function AuthProvider({ children }) {
   async function performLogout() {
     justLoggedOut.current = true;
     clearSubscriptionReminders();
+    clearStockWarnings();
     await clearToken();
     await SecureStore.deleteItemAsync('cachedUser');
     clearLocalData();
