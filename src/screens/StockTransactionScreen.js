@@ -7,25 +7,18 @@ import { saveLocalStockTransaction, saveLocalSale, getLocalItemByLocalId, getLoc
 import { useAuth } from '../context/AuthContext';
 import { runSync } from '../sync/syncEngine';
 import { formatMoney, formatNumber, quantityStep } from '../utils/format';
-import { formatPhone } from '../utils/phone';
 import { saleTotals, splitAmountPaid } from '../utils/sale';
 import Icon from '../components/Icon';
-import CustomerSheet from '../components/CustomerSheet';
+import SalePayment, { amountPaidInputFor } from '../components/SalePayment';
 import AddSaleItemsSheet from '../components/AddSaleItemsSheet';
 import SaleLines from '../components/SaleLines';
-import { Text, Screen, NavHeader, Card, Divider, Segmented, Stepper, Field, Note, Stat, BottomBar, Button, IconButton, Banner } from '../components/ui';
+import { Text, Screen, NavHeader, Card, Divider, Segmented, Stepper, Field, Note, Stat, BottomBar, Button, Banner } from '../components/ui';
 import { colors, fonts, type as typo } from '../theme';
 
 const TYPES = [
   { key: 'in', label: 'Stock in' },
   { key: 'out', label: 'Stock out · Sale' },
   { key: 'adjustment', label: 'Adjustment' },
-];
-
-// How the customer paid for a sale; recorded on stock-out only and split out in Reports.
-const PAYMENT_METHODS = [
-  { key: 'cash', label: 'Cash' },
-  { key: 'transfer', label: 'Transfer' },
 ];
 
 // This screen is the client-side counterpart to PRC-07/PRC-08/PRC-09 on the server:
@@ -36,10 +29,10 @@ const PAYMENT_METHODS = [
 //   single-item rules: quantity is checked against that item's stock, and a blank price uses
 //   the item's last purchase price, labelled on the line (PRC-08). Problems show on the line
 //   and Save stays off until every line is valid.
-// - Part payment (Stock Out): "Amount paid" is for the whole sale and optional — blank means
-//   paid in full. Anything less (including 0, fully on credit) leaves a balance owed by a
-//   customer, chosen from the phone's contacts or typed in with the contact button beside the
-//   field. Balances are followed up on the Debtors screen.
+// - Payment (Stock Out, components/SalePayment.js): paid in full, part payment or not paid yet,
+//   for the whole sale. A balance must be owed by a customer: someone who already owes (shown
+//   with their current balance), or a new one from contacts or typed in. Balances are followed
+//   up on the Debtors screen.
 // - Saving a sale writes one stock-out per line, all sharing a new saleId, the customer and the
 //   payment method, so sync and Reports keep working per item. The amount paid is split across
 //   the lines in proportion to each line's total (utils/sale.js), so Debtors adds up.
@@ -58,9 +51,10 @@ export default function StockTransactionScreen({ route, navigation }) {
   // Sale (stock out) state: the items in the sale and the payment for the whole sale.
   const [lines, setLines] = useState(() => [newLine(route.params.item)]);
   const [paymentMethod, setPaymentMethod] = useState('cash');
-  const [amountPaidInput, setAmountPaidInput] = useState('');
+  const [paymentMode, setPaymentMode] = useState('full'); // 'full' | 'part' | 'credit'
+  const [partPaidInput, setPartPaidInput] = useState('');
+  const amountPaidInput = amountPaidInputFor(paymentMode, partPaidInput);
   const [customer, setCustomer] = useState(null); // { name, phone } who owes the balance
-  const [customerSheetOpen, setCustomerSheetOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [catalog, setCatalog] = useState([]);
 
@@ -211,6 +205,10 @@ export default function StockTransactionScreen({ route, navigation }) {
       Alert.alert(fresh[firstError].item.name, t.calcs[firstError].error);
       return;
     }
+    if (paymentMode === 'part' && !t.paidEntered) {
+      Alert.alert('How much was paid?', 'Enter the amount paid now, or choose "Not paid yet" if nothing was paid.');
+      return;
+    }
     if (t.paidEntered && t.paid < 0) {
       Alert.alert('Invalid amount', 'Amount paid must be zero or more.');
       return;
@@ -220,10 +218,7 @@ export default function StockTransactionScreen({ route, navigation }) {
       return;
     }
     if (t.owed > 0 && !customer) {
-      Alert.alert('Who is paying?', `${formatMoney(t.owed)} will be owed. Choose the customer from your contacts or enter their name and number.`, [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Add customer', onPress: () => setCustomerSheetOpen(true) },
-      ]);
+      Alert.alert('Who owes the balance?', `${formatMoney(t.owed)} will be owed. Choose the customer under "Who owes the balance?" before saving.`);
       return;
     }
 
@@ -243,8 +238,9 @@ export default function StockTransactionScreen({ route, navigation }) {
       priceWasDefaulted: t.calcs[index].priceWasDefaulted,
       paymentMethod,
       amountPaid: shares ? shares[index] : null,
-      customerName: customer ? customer.name : null,
-      customerPhone: customer ? customer.phone : null,
+      // Only a sale with a balance is tied to a customer (Debtors follows those up).
+      customerName: t.owed > 0 ? customer.name : null,
+      customerPhone: t.owed > 0 ? customer.phone : null,
       saleId,
       occurredAt,
       userId: user.id,
@@ -286,7 +282,11 @@ export default function StockTransactionScreen({ route, navigation }) {
 
   if (type === 'out') {
     const t = saleTotals(lines, amountPaidInput);
-    const saveTitle = t.errors ? `Fix ${t.errors} item${t.errors > 1 ? 's' : ''} to save` : 'Save sale';
+    const saveTitle = t.errors
+      ? `Fix ${t.errors} item${t.errors > 1 ? 's' : ''} to save`
+      : t.owed > 0
+        ? `Save sale · ${formatMoney(t.owed)} owed`
+        : 'Save sale';
     return (
       <Screen>
         <NavHeader title="Record transaction" />
@@ -297,54 +297,18 @@ export default function StockTransactionScreen({ route, navigation }) {
 
             <SaleLines lines={lines} calcs={t.calcs} onChange={updateLine} onRemove={removeLine} onAdd={openPicker} />
 
-            <View style={{ gap: 8 }}>
-              <Field
-                label="Amount paid"
-                optional
-                prefix="₦"
-                keyboardType="decimal-pad"
-                value={amountPaidInput}
-                onChangeText={setAmountPaidInput}
-                placeholder={`Full amount (${formatMoney(t.total)})`}
-                hint="Leave blank if paid in full. Enter less for a part payment, or 0 if nothing was paid."
-                trailing={
-                  <IconButton
-                    icon="contacts"
-                    label={customer ? `Customer: ${customer.name}. Change` : 'Choose who is paying'}
-                    variant={customer ? 'soft' : 'ghost'}
-                    size={40}
-                    onPress={() => setCustomerSheetOpen(true)}
-                  />
-                }
-              />
-              {customer && (
-                <View style={styles.customerRow}>
-                  <Icon name="user" size={16} color={colors.ink2} />
-                  <Text style={styles.customerText} numberOfLines={1}>
-                    {customer.name} · {formatPhone(customer.phone)}
-                  </Text>
-                  <Button title="Remove" variant="ghost" height={32} onPress={() => setCustomer(null)} />
-                </View>
-              )}
-              {t.overpaid ? (
-                <Note kind="error" icon="alert">
-                  The sale total is {formatMoney(t.total)}. Amount paid can't be more than that.
-                </Note>
-              ) : (
-                t.owed > 0 && (
-                  <Note kind={customer ? 'info' : 'warn'} icon={customer ? 'info' : 'alert'}>
-                    {formatMoney(t.owed)} will be owed{customer ? ` by ${customer.name}` : '. Tap the contact button to choose who is paying.'}
-                  </Note>
-                )
-              )}
-            </View>
-
-            {!t.nothingPaid && (
-              <View style={{ gap: 8 }}>
-                <Text style={typo.label}>{t.owed > 0 ? 'Part payment made by' : 'Payment'}</Text>
-                <Segmented accessibilityLabel="Payment method" options={PAYMENT_METHODS} value={paymentMethod} onChange={setPaymentMethod} />
-              </View>
-            )}
+            <SalePayment
+              companyId={user.companyId}
+              totals={t}
+              mode={paymentMode}
+              onModeChange={setPaymentMode}
+              partInput={partPaidInput}
+              onPartInputChange={setPartPaidInput}
+              paymentMethod={paymentMethod}
+              onPaymentMethodChange={setPaymentMethod}
+              customer={customer}
+              onCustomerChange={setCustomer}
+            />
           </ScrollView>
 
           <BottomBar>
@@ -371,15 +335,6 @@ export default function StockTransactionScreen({ route, navigation }) {
           onToggle={toggleLine}
           onScan={scanIntoSale}
           onClose={() => setPickerOpen(false)}
-        />
-        <CustomerSheet
-          visible={customerSheetOpen}
-          initial={customer}
-          onClose={() => setCustomerSheetOpen(false)}
-          onSave={(c) => {
-            setCustomer(c);
-            setCustomerSheetOpen(false);
-          }}
         />
       </Screen>
     );
@@ -466,8 +421,6 @@ const styles = StyleSheet.create({
   itemRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   itemIcon: { width: 44, height: 44, borderRadius: 12, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
   itemName: { fontFamily: fonts.semibold, fontSize: 16 },
-  customerRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 4 },
-  customerText: { flex: 1, fontFamily: fonts.medium, fontSize: 14, color: colors.ink2 },
   summary: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   summaryUnits: { fontFamily: fonts.semibold, fontSize: 16, fontVariant: ['tabular-nums'] },
   summaryTotal: { fontFamily: fonts.display, fontSize: 24, lineHeight: 28, letterSpacing: -0.3, fontVariant: ['tabular-nums'] },
