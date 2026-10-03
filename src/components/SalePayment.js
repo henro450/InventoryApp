@@ -6,6 +6,7 @@ import { formatPhone, normalizePhone } from '../utils/phone';
 import { roundMoney } from '../utils/sale';
 import Icon from './Icon';
 import CustomerSheet from './CustomerSheet';
+import PaymentMethodPicker from './PaymentMethodPicker';
 import { Text, Card, ListCard, Divider, Segmented, Field, Note, Button, SearchField, LetterTile, KV, Chip, InlineEmpty } from './ui';
 import { colors, fonts, type } from '../theme';
 
@@ -13,12 +14,6 @@ export const PAYMENT_MODES = [
   { key: 'full', label: 'Paid in full' },
   { key: 'part', label: 'Part payment' },
   { key: 'credit', label: 'Not paid yet' },
-];
-
-// How the customer paid for a sale; recorded on stock-out only and split out in Reports.
-const PAYMENT_METHODS = [
-  { key: 'cash', label: 'Cash' },
-  { key: 'transfer', label: 'Transfer' },
 ];
 
 // Up to this many people who already owe are offered as one-tap picks before searching.
@@ -37,7 +32,7 @@ export function amountPaidInputFor(mode, partInput) {
 // without seeing their current balance. New customers come from contacts or are typed in.
 export default function SalePayment({
   companyId, totals: t, mode, onModeChange, partInput, onPartInputChange,
-  paymentMethod, onPaymentMethodChange, customer, onCustomerChange,
+  paymentMethod, onPaymentMethodChange, split, onSplitChange, customer, onCustomerChange,
 }) {
   const [query, setQuery] = useState('');
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -96,10 +91,14 @@ export default function SalePayment({
       )}
 
       {mode !== 'credit' && (
-        <View style={{ gap: 8 }}>
-          <Text style={type.label}>{mode === 'part' ? 'Part payment made by' : 'Paid by'}</Text>
-          <Segmented accessibilityLabel="Payment method" options={PAYMENT_METHODS} value={paymentMethod} onChange={onPaymentMethodChange} />
-        </View>
+        <PaymentMethodPicker
+          label={mode === 'part' ? 'Part payment made by' : 'Paid by'}
+          amount={mode === 'part' ? (t.paidEntered ? t.paid : 0) : t.total}
+          method={paymentMethod}
+          onMethodChange={onPaymentMethodChange}
+          split={split}
+          onSplitChange={onSplitChange}
+        />
       )}
 
       {mode === 'full' && paymentMethod === 'cash' && (

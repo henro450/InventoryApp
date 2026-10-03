@@ -18,7 +18,8 @@ import {
 import { colors, fonts, type } from '../theme';
 
 const PREVIEW_ROWS = 5;
-const PAYMENT_LABEL = { cash: 'Cash', transfer: 'Transfer', credit: 'Not paid yet (owed)' };
+const PAYMENT_LABEL = { cash: 'Cash', transfer: 'Transfer', pos: 'POS', credit: 'Not paid yet (owed)' };
+const PAYMENT_COLOR = { cash: colors.ok, transfer: colors.primary, pos: colors.warn, credit: colors.danger };
 
 // Written for people who don't read accounts: a plain-language "How your business did" summary
 // first, then who owes money and the stock you have; the detailed reports sit under "More
@@ -255,16 +256,18 @@ export default function ReportsScreen({ route, navigation }) {
   const svp = salesVsPurchases;
   const svpMax = svp ? Math.max(svp.totalSalesRevenue, svp.totalPurchaseCost, 1) : 1;
   const paymentRows = svp
-    ? ['cash', 'transfer', 'credit'].map((key) => {
+    ? ['cash', 'transfer', 'pos', 'credit'].map((key) => {
         const bucket = svp.salesByPaymentMethod[key];
         return {
           key,
           method: PAYMENT_LABEL[key],
           count: bucket.count,
           revenue: bucket.revenue,
-          share: svp.totalSalesRevenue > 0 ? (bucket.revenue / svp.totalSalesRevenue) * 100 : 0,
+          share: svp.totalSalesRevenue > 0 ? Math.max(0, (bucket.revenue / svp.totalSalesRevenue) * 100) : 0,
         };
       })
+      // POS only shows once it's been used.
+      .filter((row) => row.key !== 'pos' || row.count > 0 || row.revenue !== 0)
     : [];
   const companyMax = marginByCompany ? Math.max(0, ...marginByCompany.map((c) => c.margin)) : 0;
   const dateLabel =
@@ -489,7 +492,7 @@ export default function ReportsScreen({ route, navigation }) {
                       <View
                         style={[
                           styles.payFill,
-                          { width: `${row.share}%`, backgroundColor: row.key === 'cash' ? colors.ok : row.key === 'transfer' ? colors.primary : colors.danger },
+                          { width: `${Math.min(100, row.share)}%`, backgroundColor: PAYMENT_COLOR[row.key] },
                         ]}
                       />
                     </View>
@@ -504,12 +507,23 @@ export default function ReportsScreen({ route, navigation }) {
                     <KV label="Paid back by customers" value={formatMoney(svp.repayments.total)} valueColor={colors.ok} />
                     <Text style={type.caption}>
                       Cash {formatMoney(svp.repayments.cash.amount)} · Transfer {formatMoney(svp.repayments.transfer.amount)}
+                      {svp.repayments.pos.amount > 0 ? ` · POS ${formatMoney(svp.repayments.pos.amount)}` : ''}
+                    </Text>
+                  </>
+                )}
+                {svp.returnCount > 0 && (
+                  <>
+                    <Divider />
+                    <KV label="Returned or cancelled" value={formatMoney(svp.returnsValue)} valueColor={colors.danger} />
+                    <Text style={type.caption}>
+                      {plural(svp.returnCount, 'item line')} brought back or voided. Already taken off the sales above: money handed back comes off how it
+                      was paid back, and cancelled debts come off "Not paid yet".
                     </Text>
                   </>
                 )}
                 <Text style={type.caption}>
-                  Cash and Transfer are what customers paid when they bought. "Not paid yet" is what they still owed from those sales.
-                  Older sales from before payment types were added count as cash.
+                  Cash, Transfer and POS are what customers paid when they bought; a split payment counts under each part. "Not paid yet" is what
+                  they still owed from those sales. Older sales from before payment types were added count as cash.
                 </Text>
               </>
             )}
@@ -743,6 +757,7 @@ export default function ReportsScreen({ route, navigation }) {
                         {Number(s.totalSalesRevenue) > 0 && (
                           <Text style={type.caption}>
                             Cash {formatMoney(s.cashSalesRevenue)} · Transfer {formatMoney(s.transferSalesRevenue)}
+                            {Number(s.posSalesRevenue) ? ` · POS ${formatMoney(s.posSalesRevenue)}` : ''}
                           </Text>
                         )}
                         {Number(s.outstandingDebt) > 0 && <Text style={type.caption}>Customers owed {formatMoney(s.outstandingDebt)}</Text>}
@@ -805,6 +820,10 @@ function BusinessSummary({ summary, periodLabel, owedTotal, onOpenDebtors }) {
             <Text style={type.label}>How these sales were paid</Text>
             <SummaryLine label="Cash" value={formatMoney(summary.cash)} />
             <SummaryLine label="Transfer" value={formatMoney(summary.transfer)} />
+            {summary.pos !== 0 && <SummaryLine label="POS" value={formatMoney(summary.pos)} />}
+            {summary.returnsValue > 0 && (
+              <SummaryLine label="Returned or cancelled (already taken off)" value={formatMoney(summary.returnsValue)} color={colors.danger} />
+            )}
             {summary.owedFromTheseSales > 0 && (
               <SummaryLine label="Not paid yet" value={formatMoney(summary.owedFromTheseSales)} color={colors.danger} />
             )}

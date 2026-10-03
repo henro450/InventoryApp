@@ -7,7 +7,9 @@ import { saveLocalStockTransaction, saveLocalSale, getLocalItemByLocalId, getLoc
 import { useAuth } from '../context/AuthContext';
 import { runSync } from '../sync/syncEngine';
 import { formatMoney, formatNumber, quantityStep } from '../utils/format';
-import { saleTotals, splitAmountPaid } from '../utils/sale';
+import { saleTotals, splitAmountPaid, splitBreakdown } from '../utils/sale';
+import { breakdownFromInputs, splitProblem } from '../utils/payments';
+import { saleKey } from '../reports/salesMath';
 import Icon from '../components/Icon';
 import SalePayment, { amountPaidInputFor } from '../components/SalePayment';
 import AddSaleItemsSheet from '../components/AddSaleItemsSheet';
@@ -50,7 +52,8 @@ export default function StockTransactionScreen({ route, navigation }) {
 
   // Sale (stock out) state: the items in the sale and the payment for the whole sale.
   const [lines, setLines] = useState(() => [newLine(route.params.item)]);
-  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [paymentMethod, setPaymentMethod] = useState('cash'); // 'cash' | 'transfer' | 'pos' | 'mixed'
+  const [paymentSplit, setPaymentSplit] = useState({ cash: '', transfer: '', pos: '' }); // amounts as typed, for 'mixed'
   const [paymentMode, setPaymentMode] = useState('full'); // 'full' | 'part' | 'credit'
   const [partPaidInput, setPartPaidInput] = useState('');
   const amountPaidInput = amountPaidInputFor(paymentMode, partPaidInput);
@@ -222,8 +225,17 @@ export default function StockTransactionScreen({ route, navigation }) {
       return;
     }
 
+    // A split payment must add up to what was paid now (nothing to split when nothing was paid).
+    const mixed = paymentMethod === 'mixed' && t.paid > 0;
+    if (mixed && splitProblem(paymentSplit, t.paid)) {
+      Alert.alert('Check the split', splitProblem(paymentSplit, t.paid));
+      return;
+    }
+
     // Part payment: split what was paid across the lines by line total. Paid in full = null.
     const shares = t.owed > 0 ? splitAmountPaid(t.calcs.map((c) => c.total), t.paid) : null;
+    // A split payment is shared out across the lines by what each line was paid.
+    const lineBreakdowns = mixed ? splitBreakdown(shares || t.calcs.map((c) => c.total), breakdownFromInputs(paymentSplit)) : null;
     const saleId = fresh.length > 1 ? uuidv4() : null; // single-item sales stay as before
     const occurredAt = new Date().toISOString();
     const transactions = fresh.map((l, index) => ({
@@ -236,7 +248,9 @@ export default function StockTransactionScreen({ route, navigation }) {
       quantity: t.calcs[index].qty,
       unitPrice: t.calcs[index].price,
       priceWasDefaulted: t.calcs[index].priceWasDefaulted,
-      paymentMethod,
+      // A line that was paid nothing (its share of a small part payment rounded to 0) has no split.
+      paymentMethod: !mixed ? (paymentMethod === 'mixed' ? 'cash' : paymentMethod) : Object.keys(lineBreakdowns[index]).length ? 'mixed' : 'cash',
+      paymentBreakdown: mixed && Object.keys(lineBreakdowns[index]).length ? lineBreakdowns[index] : null,
       amountPaid: shares ? shares[index] : null,
       // Only a sale with a balance is tied to a customer (Debtors follows those up).
       customerName: t.owed > 0 ? customer.name : null,
@@ -262,6 +276,11 @@ export default function StockTransactionScreen({ route, navigation }) {
 
     runSync(user.id);
     navigation.goBack();
+    // The receipt is one tap away: open the sale to share it, or carry on.
+    Alert.alert('Sale saved', `${formatMoney(t.total)} sold${t.owed > 0 ? `, ${formatMoney(t.owed)} still owed` : ''}.`, [
+      { text: 'Done', style: 'cancel' },
+      { text: 'Receipt', onPress: () => navigation.navigate('SaleDetail', { saleKey: saleKey(transactions[0]) }) },
+    ]);
   }
 
   const subscriptionBanner = subscriptionBlocked && (
@@ -306,6 +325,8 @@ export default function StockTransactionScreen({ route, navigation }) {
               onPartInputChange={setPartPaidInput}
               paymentMethod={paymentMethod}
               onPaymentMethodChange={setPaymentMethod}
+              split={paymentSplit}
+              onSplitChange={setPaymentSplit}
               customer={customer}
               onCustomerChange={setCustomer}
             />

@@ -31,6 +31,8 @@ import DebtorDetailScreen from '../screens/DebtorDetailScreen';
 import CompanyUsersScreen from '../screens/CompanyUsersScreen';
 import MoneyOutScreen from '../screens/MoneyOutScreen';
 import SavingsScreen from '../screens/SavingsScreen';
+import SalesScreen from '../screens/SalesScreen';
+import SaleDetailScreen from '../screens/SaleDetailScreen';
 import SplashView from '../components/SplashView';
 import TabBar from '../components/TabBar';
 import { startConnectivityWatcher } from '../sync/syncEngine';
@@ -66,11 +68,12 @@ function HomeTabs() {
   const { user, isMainCompany, isCompanyAdmin } = useAuth();
   const tabBar = (props) => <TabBar {...props} onScan={() => startScanToFind(props.navigation, user.companyId)} />;
 
-  // Regular (non-admin) users: sales and stock, plus who owes money.
+  // Regular (non-admin) users: stock, their sales, plus who owes money.
   if (!isCompanyAdmin) {
     return (
       <Tab.Navigator screenOptions={{ headerShown: false }} tabBar={tabBar}>
         <Tab.Screen name="Inventory" component={InventoryScreen} />
+        <Tab.Screen name="Sales" component={SalesScreen} />
         <Tab.Screen name="Scan" component={ScanPlaceholder} />
         <Tab.Screen name="Debtors" component={DebtorsScreen} initialParams={{ asTab: true }} />
       </Tab.Navigator>
@@ -81,6 +84,7 @@ function HomeTabs() {
     <Tab.Navigator screenOptions={{ headerShown: false }} tabBar={tabBar}>
       {isMainCompany && <Tab.Screen name="Overview" component={DashboardScreen} />}
       <Tab.Screen name="Inventory" component={InventoryScreen} />
+      <Tab.Screen name="Sales" component={SalesScreen} />
       {!isMainCompany && <Tab.Screen name="Reports" component={ReportsScreen} />}
       <Tab.Screen name="Scan" component={ScanPlaceholder} />
       {isMainCompany && <Tab.Screen name="Reports" component={ReportsScreen} />}
@@ -150,6 +154,7 @@ export default function RootNavigator() {
             {/* People owing from part-paid/credit sales (own company; Main Company can open a Sub's read-only). */}
             <Stack.Screen name="Debtors" component={DebtorsScreen} />
             <Stack.Screen name="DebtorDetail" component={DebtorDetailScreen} />
+            <Stack.Screen name="SaleDetail" component={SaleDetailScreen} />
             {/* Money out: admins see and record every kind; other users record expenses. */}
             <Stack.Screen name="MoneyOut" component={MoneyOutScreen} />
             {isCompanyAdmin && <Stack.Screen name="Savings" component={SavingsScreen} />}

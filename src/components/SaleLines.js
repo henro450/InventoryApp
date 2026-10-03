@@ -3,10 +3,12 @@ import { View, Pressable, TextInput, StyleSheet } from 'react-native';
 import Icon from './Icon';
 import { Text, ListCard, LetterTile, IconButton, CountBadge } from './ui';
 import { formatMoney, formatNumber, cleanNumberInput, cleanQuantityInput, quantityStep, groupDigits } from '../utils/format';
+import { defaultSalePrice } from '../utils/sale';
 import { colors, fonts, type } from '../theme';
 
 // The items in a sale (stock out): one row per item with its quantity and optional sale price.
-// A blank price uses the item's last purchase price, labelled in blue on the row. A row with a
+// A blank price uses the item's selling price, or failing that its last purchase price, labelled
+// on the row as a warning (the sale is then recorded at cost, with no profit). A row with a
 // problem (more than is on hand, no price to use) turns red and says what's wrong.
 // lines[i] = { item, quantity, unitPrice }; calcs[i] = lineCalc(lines[i]) from utils/sale.js.
 export default function SaleLines({ lines, calcs, onChange, onRemove, onAdd }) {
@@ -61,7 +63,7 @@ function SaleLine({ line, calc, first, onChange, onRemove }) {
   const qty = Number(line.quantity) || 0;
   const step = quantityStep(item); // 0.5 for items that allow decimals, else 1
   const stepTo = (next) => onChange({ quantity: String(Math.round(next * 100) / 100) });
-  const hasDefault = item.lastPurchasePrice !== null && item.lastPurchasePrice !== undefined;
+  const fallback = defaultSalePrice(item);
   return (
     <View style={[styles.line, !first && styles.lineBorder, calc.error && { backgroundColor: colors.dangerSoft }]}>
       <View style={styles.lineHead}>
@@ -113,7 +115,7 @@ function SaleLine({ line, calc, first, onChange, onRemove }) {
             value={groupDigits(cleanNumberInput(line.unitPrice))}
             onChangeText={(t) => onChange({ unitPrice: cleanNumberInput(t) })}
             keyboardType="decimal-pad"
-            placeholder={hasDefault ? groupDigits(String(Number(item.lastPurchasePrice))) : 'Sale price'}
+            placeholder={fallback.price !== null ? groupDigits(String(fallback.price)) : 'Sale price'}
             placeholderTextColor={colors.placeholder}
             accessibilityLabel={`Sale price per unit for ${item.name}`}
             style={styles.priceInput}
@@ -130,7 +132,7 @@ function SaleLine({ line, calc, first, onChange, onRemove }) {
       ) : (
         <View style={styles.foot}>
           {calc.priceWasDefaulted ? (
-            <Text style={[type.caption, { color: colors.primaryInk }]}>Last purchase price</Text>
+            <Text style={[type.caption, { color: colors.warn, flex: 1 }]}>At cost price, no profit. Type the sale price.</Text>
           ) : (
             <Text style={type.caption}>
               {formatNumber(calc.qty)} × {formatMoney(calc.price)}

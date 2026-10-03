@@ -9,16 +9,14 @@ import { runSync } from '../sync/syncEngine';
 import { useLocalRefresh } from '../hooks/useLocalRefresh';
 import { formatDate, formatMoney, formatNumber } from '../utils/format';
 import { formatPhone } from '../utils/phone';
+import { PAYMENT_METHODS as ALL_METHODS, methodLabel } from '../utils/payments';
 import {
   Text, Screen, NavHeader, Card, SectionTitle, Divider, Button, Field, Segmented, Sheet, Pill, InlineEmpty, KV, Loading,
 } from '../components/ui';
 import { colors, fonts, type } from '../theme';
 
-const PAYMENT_METHODS = [
-  { key: 'cash', label: 'Cash' },
-  { key: 'transfer', label: 'Transfer' },
-];
-const METHOD_LABEL = { cash: 'Cash', transfer: 'Transfer' };
+// Repayments are one method each (no split).
+const PAYMENT_METHODS = ALL_METHODS.filter((m) => m.key !== 'mixed');
 
 // One customer's balance: their part-paid/credit sales and every repayment. "Record payment"
 // saves money received on this phone first (works offline) and syncs it like any transaction.
@@ -122,7 +120,7 @@ export default function DebtorDetailScreen({ route }) {
                 {i > 0 && <Divider />}
                 <View style={styles.row}>
                   <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={styles.rowTitle}>{METHOD_LABEL[p.paymentMethod] || 'Cash'}</Text>
+                    <Text style={styles.rowTitle}>{methodLabel(p.paymentMethod)}</Text>
                     <Text style={type.caption}>{formatDate(p.occurredAt)}</Text>
                   </View>
                   {p.pending && <Pill kind="warn" icon="sync" label="Not synced" />}
@@ -151,8 +149,9 @@ export default function DebtorDetailScreen({ route }) {
                     {s.lines.length > 1 && <Text style={type.caption}>{s.lines.length} items in one sale</Text>}
                     <Text style={type.caption}>
                       {formatDate(s.occurredAt)} · {formatMoney(s.total)} · paid {formatMoney(s.amountPaid)}
-                      {s.amountPaid > 0 ? ` (${METHOD_LABEL[s.paymentMethod]})` : ''}
+                      {s.amountPaid > 0 ? ` (${methodLabel(s.paymentMethod)})` : ''}
                     </Text>
+                    {s.returned > 0 && <Text style={type.caption}>{formatMoney(s.returned)} taken off for goods returned</Text>}
                   </View>
                   {s.pending && <Pill kind="warn" icon="sync" label="Not synced" />}
                   <Text style={[styles.amount, s.owed > 0 ? { color: colors.danger } : { color: colors.ink3 }]}>

@@ -64,6 +64,7 @@ function applyItemChange(operation, item, userId) {
     lowStockThreshold: item.lowStockThreshold,
     allowDecimal: !!item.allowDecimal,
     lastPurchasePrice: item.lastPurchasePrice,
+    sellingPrice: item.sellingPrice,
     version: item.version,
     updatedAt: item.updatedAt,
     syncStatus: 'synced',

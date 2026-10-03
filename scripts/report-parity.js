@@ -154,12 +154,36 @@ function expectClose(label, local, server) {
   });
   await repay(10, phone, 30, 'cash');
   await repay(11, phone, 40, 'transfer');
+  // Selling price, POS and split payments: a sale with no price uses the selling price; a POS
+  // sale; a multi-item sale paid partly in cash, partly by transfer and POS.
+  const c = (await call('POST', '/items', { sku: `PAR-C-${stamp}`, name: `Parity C ${stamp}`, category: 'Parity', sellingPrice: 75 })).item;
+  await tx(c.id, 'in', 10, 50, 12);
+  await tx(c.id, 'out', 2, undefined, 13, 'pos');
+  await call('POST', '/transactions/sales', {
+    saleId: `par-mixed-${stamp}`,
+    lines: [
+      { clientTransactionId: `par-${stamp}-mix-a`, itemId: a.id, quantity: 1, unitPrice: 160 },
+      { clientTransactionId: `par-${stamp}-mix-c`, itemId: c.id, quantity: 2 },
+    ],
+    paymentMethod: 'mixed', paymentBreakdown: { cash: 100, transfer: 60, pos: 150 }, occurredAt: day(13),
+  });
+  // Returns: the fully-on-credit sale (day 9, 140 owed) is voided, and 2 of the 5 sold by
+  // transfer on day 2 come back, handed back by transfer.
+  await call('POST', '/transactions/returns', {
+    returnReason: 'void', occurredAt: day(14),
+    lines: [{ clientTransactionId: `par-${stamp}-ret-1`, returnOf: `par-${stamp}-9`, quantity: 1 }],
+  });
+  await call('POST', '/transactions/returns', {
+    returnReason: 'return', occurredAt: day(14),
+    lines: [{ clientTransactionId: `par-${stamp}-ret-2`, returnOf: `par-${stamp}-2`, quantity: 2, paymentMethod: 'transfer' }],
+  });
+  await repay(15, phone, 10, 'pos');
 
   const local = await pullLocalState();
   const serverIdOf = new Map(local.items.map((i) => [i.localId, i.id]));
   const own = me.companyId;
   const companyIds = [own, ...local.companies.filter((c) => c.parentCompanyId === own).map((c) => c.id)];
-  const ranges = [{}, { from: day(2), to: day(6) }];
+  const ranges = [{}, { from: day(2), to: day(6) }, { from: day(12), to: day(15) }];
 
   // Stock on hand
   const soh = await call('GET', `/reports/stock-on-hand?companyId=${own}`);
@@ -174,14 +198,14 @@ function expectClose(label, local, server) {
     const qs = new URLSearchParams({ companyId: own, ...r }).toString();
     const server = await call('GET', `/reports/sales-vs-purchases?${qs}`);
     const mine = math.salesVsPurchases(local.transactions, own, r, local.payments);
-    for (const k of ['totalPurchaseCost', 'totalSalesRevenue', 'margin', 'purchaseCount', 'saleCount']) {
+    for (const k of ['totalPurchaseCost', 'totalSalesRevenue', 'margin', 'purchaseCount', 'saleCount', 'returnCount', 'returnsValue']) {
       expectClose(`sales-vs-purchases ${JSON.stringify(r)} ${k}`, mine[k], server[k]);
     }
-    for (const m of ['cash', 'transfer', 'credit']) {
+    for (const m of ['cash', 'transfer', 'pos', 'credit']) {
       expectClose(`sales by payment ${JSON.stringify(r)} ${m} revenue`, mine.salesByPaymentMethod[m].revenue, server.salesByPaymentMethod[m].revenue);
       expectClose(`sales by payment ${JSON.stringify(r)} ${m} count`, mine.salesByPaymentMethod[m].count, server.salesByPaymentMethod[m].count);
     }
-    for (const m of ['cash', 'transfer']) {
+    for (const m of ['cash', 'transfer', 'pos']) {
       expectClose(`repayments ${JSON.stringify(r)} ${m}`, mine.repayments[m].amount, server.repayments[m].amount);
     }
     expectClose(`repayments ${JSON.stringify(r)} total`, mine.repayments.total, server.repayments.total);
@@ -220,7 +244,7 @@ function expectClose(label, local, server) {
   );
   for (const k of ['outstanding', 'customersOwing', 'totalRepaid']) expectClose(`debtors totals ${k}`, mineDebtors.totals[k], serverDebtors.totals[k]);
   const thisCustomer = mineDebtors.customers.find((c) => c.customerPhone === phone);
-  expectClose('parity customer balance (120-50 + 140 + (290+40)-100 - 70)', thisCustomer?.balance, 370);
+  expectClose('parity customer balance (120-50 + 140 + (290+40)-100 - 70 - 140 voided - 10)', thisCustomer?.balance, 220);
 
   // Discrepancies
   const disc = await call('GET', `/reports/discrepancies?companyId=${own}`);
@@ -231,7 +255,7 @@ function expectClose(label, local, server) {
   );
 
   // Price trend (ids differ: server price_history rows vs transactions — compare the points)
-  for (const item of [a, b]) {
+  for (const item of [a, b, c]) {
     const localId = local.items.find((i) => i.id === item.id).localId;
     const server = await call('GET', `/reports/price-trend?companyId=${own}&itemId=${item.id}`);
     expectEqual(
@@ -261,7 +285,7 @@ function expectClose(label, local, server) {
     const mineById = new Map(mine.companies.map((c) => [c.companyId, c]));
     expectEqual(`oversight ${JSON.stringify(r)} companies`, [...mineById.keys()].sort(), server.companies.map((c) => c.companyId).sort());
     for (const row of server.companies) {
-      for (const k of ['itemCount', 'lowStockCount', 'totalPurchaseCost', 'totalSalesRevenue', 'margin', 'cashSalesRevenue', 'transferSalesRevenue', 'outstandingDebt']) {
+      for (const k of ['itemCount', 'lowStockCount', 'totalPurchaseCost', 'totalSalesRevenue', 'margin', 'cashSalesRevenue', 'transferSalesRevenue', 'posSalesRevenue', 'outstandingDebt']) {
         expectClose(`oversight ${JSON.stringify(r)} ${row.companyName} ${k}`, mineById.get(row.companyId)?.[k], row[k]);
       }
     }
