@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { runSync } from '../sync/syncEngine';
 import Icon from '../components/Icon';
 import { Text, Screen, NavHeader, Field, Chip, Stepper, BottomBar, Button, Checkbox } from '../components/ui';
+import { formatMoney } from '../utils/format';
 import { colors, fonts, type } from '../theme';
 
 const UNIT_PRESETS = ['unit', 'box', 'kg', 'm', 'pair', 'litre'];
@@ -34,6 +35,14 @@ export default function AddItemScreen({ navigation, route }) {
   );
   // Items sold by weight or length can take decimal quantities (e.g. 2.5 kg). Off by default.
   const [allowDecimal, setAllowDecimal] = useState(!!editingItem?.allowDecimal);
+  // What the item normally sells for. Sales use it when no price is typed; without it they fall
+  // back to the last purchase price, which records the sale at cost (no profit).
+  const [sellingPrice, setSellingPrice] = useState(
+    editingItem?.sellingPrice !== null && editingItem?.sellingPrice !== undefined ? String(editingItem.sellingPrice) : ''
+  );
+  const cost = editingItem?.lastPurchasePrice;
+  const hasCost = cost !== null && cost !== undefined;
+  const sellingNumber = sellingPrice.trim() === '' ? null : Number(sellingPrice);
   const [submitting, setSubmitting] = useState(false);
 
   // Suggest the categories this company already uses, most common first.
@@ -63,6 +72,7 @@ export default function AddItemScreen({ navigation, route }) {
           unit,
           lowStockThreshold: lowStockThreshold ? Number(lowStockThreshold) : 0,
           allowDecimal,
+          sellingPrice: sellingNumber,
           updatedAt: new Date().toISOString(),
           syncStatus: 'pending',
           userId: user.id,
@@ -81,6 +91,7 @@ export default function AddItemScreen({ navigation, route }) {
           quantityOnHand: 0,
           lowStockThreshold: lowStockThreshold ? Number(lowStockThreshold) : 0,
           allowDecimal,
+          sellingPrice: sellingNumber,
           lastPurchasePrice: null,
           updatedAt: new Date().toISOString(),
           syncStatus: 'pending',
@@ -138,6 +149,21 @@ export default function AddItemScreen({ navigation, route }) {
           )}
 
           <Field label="Item name" value={name} onChangeText={setName} placeholder="e.g. Widget" />
+
+          <Field
+            label="Selling price"
+            optional
+            prefix="₦"
+            keyboardType="decimal-pad"
+            value={sellingPrice}
+            onChangeText={setSellingPrice}
+            placeholder="0"
+            hint={
+              sellingNumber !== null && hasCost
+                ? `Bought for ${formatMoney(cost)}. Profit per ${unit || 'unit'}: ${formatMoney(sellingNumber - Number(cost))}.`
+                : 'Used on every sale unless you type a different price. Without it, sales are recorded at the price you paid.'
+            }
+          />
 
           <View style={{ gap: 8 }}>
             <Field label="Category" optional value={category} onChangeText={setCategory} placeholder="e.g. Hardware" />

@@ -27,7 +27,31 @@ function isActive(item) {
 
 // Sales recorded before payment methods existed count as cash (same rule as the server).
 export function paymentMethodOf(tx) {
-  return tx.paymentMethod === 'transfer' ? 'transfer' : 'cash';
+  return ['transfer', 'pos', 'mixed'].includes(tx.paymentMethod) ? tx.paymentMethod : 'cash';
+}
+
+// A mixed payment's split, stored as JSON text on the device ({ cash, transfer, pos }).
+function breakdownOf(tx) {
+  if (!tx.paymentBreakdown) return null;
+  if (typeof tx.paymentBreakdown === 'object') return tx.paymentBreakdown;
+  try {
+    return JSON.parse(tx.paymentBreakdown);
+  } catch {
+    return null;
+  }
+}
+
+// What one sale row took in (or one return handed back) by method: { cash, transfer, pos }.
+// Mirrors paidByMethod in the server's utils/salePayment.js.
+export function paidByMethod(tx, paid) {
+  const method = paymentMethodOf(tx);
+  const breakdown = method === 'mixed' ? breakdownOf(tx) : null;
+  if (breakdown) {
+    const out = {};
+    for (const m of ['cash', 'transfer', 'pos']) if (num(breakdown[m]) > 0) out[m] = num(breakdown[m]);
+    return out;
+  }
+  return paid > 0 ? { [method === 'mixed' ? 'cash' : method]: paid } : {};
 }
 
 export function saleTotal(tx) {
@@ -42,6 +66,16 @@ export function salePaid(tx) {
 
 export function saleOwed(tx) {
   return Math.max(0, saleTotal(tx) - salePaid(tx));
+}
+
+// Returns ('return' rows: a voided sale or items brought back) are valued at the sale's price.
+// amountPaid is what was handed back; the rest came off what the customer owed for that sale.
+export function returnRefund(tx) {
+  return salePaid(tx);
+}
+
+export function returnDebtCut(tx) {
+  return saleOwed(tx);
 }
 
 function txId(tx) {
@@ -91,7 +125,11 @@ export function salesVsPurchases(transactions, companyId, range = {}, payments =
   let totalSalesRevenue = 0;
   let purchaseCount = 0;
   let saleCount = 0;
-  const salesByPaymentMethod = { cash: { revenue: 0, count: 0 }, transfer: { revenue: 0, count: 0 }, credit: { revenue: 0, count: 0 } };
+  let returnCount = 0;
+  let returnsValue = 0;
+  const salesByPaymentMethod = {
+    cash: { revenue: 0, count: 0 }, transfer: { revenue: 0, count: 0 }, pos: { revenue: 0, count: 0 }, credit: { revenue: 0, count: 0 },
+  };
   for (const tx of transactions) {
     if (tx.companyId !== companyId || !inRange(tx, range)) continue;
     if (tx.type === 'in') {
@@ -100,29 +138,38 @@ export function salesVsPurchases(transactions, companyId, range = {}, payments =
     } else if (tx.type === 'out') {
       totalSalesRevenue += saleTotal(tx);
       saleCount += 1;
-      const paid = salePaid(tx);
       const owed = saleOwed(tx);
-      if (paid > 0) {
-        salesByPaymentMethod[paymentMethodOf(tx)].revenue += paid;
-        salesByPaymentMethod[paymentMethodOf(tx)].count += 1;
+      for (const [method, amount] of Object.entries(paidByMethod(tx, salePaid(tx)))) {
+        salesByPaymentMethod[method].revenue += amount;
+        salesByPaymentMethod[method].count += 1;
       }
       if (owed > 0) {
         salesByPaymentMethod.credit.revenue += owed;
         salesByPaymentMethod.credit.count += 1;
       }
+    } else if (tx.type === 'return') {
+      // Sales money is net of returns: what was handed back comes off its method, the rest
+      // (debt cancelled) off credit.
+      totalSalesRevenue -= saleTotal(tx);
+      returnCount += 1;
+      returnsValue += saleTotal(tx);
+      for (const [method, amount] of Object.entries(paidByMethod(tx, returnRefund(tx)))) {
+        salesByPaymentMethod[method].revenue -= amount;
+      }
+      salesByPaymentMethod.credit.revenue -= returnDebtCut(tx);
     }
   }
-  const repayments = { cash: { amount: 0, count: 0 }, transfer: { amount: 0, count: 0 }, total: 0 };
+  const repayments = { cash: { amount: 0, count: 0 }, transfer: { amount: 0, count: 0 }, pos: { amount: 0, count: 0 }, total: 0 };
   for (const p of payments) {
     if (p.companyId !== companyId || !inRange(p, range)) continue;
-    const bucket = p.paymentMethod === 'transfer' ? repayments.transfer : repayments.cash;
+    const bucket = repayments[p.paymentMethod] || repayments.cash;
     bucket.amount += num(p.amount);
     bucket.count += 1;
     repayments.total += num(p.amount);
   }
   return {
     totalPurchaseCost, totalSalesRevenue, margin: totalSalesRevenue - totalPurchaseCost, purchaseCount, saleCount,
-    salesByPaymentMethod, repayments,
+    returnCount, returnsValue, salesByPaymentMethod, repayments,
   };
 }
 
@@ -144,9 +191,15 @@ export function debtors(transactions, payments, companyId) {
     return c;
   };
   const sales = transactions
-    .filter((tx) => tx.type === 'out' && tx.companyId === companyId && tx.customerPhone)
+    .filter((tx) => (tx.type === 'out' || tx.type === 'return') && tx.companyId === companyId && tx.customerPhone)
     .sort((a, b) => time(a.occurredAt) - time(b.occurredAt));
   for (const tx of sales) {
+    if (tx.type === 'return') {
+      // A return of a credit sale takes the returned value off what the customer owes.
+      const cut = returnDebtCut(tx);
+      if (cut > 0 && byPhone.has(tx.customerPhone)) byPhone.get(tx.customerPhone).totalOwed -= cut;
+      continue;
+    }
     const owed = saleOwed(tx);
     if (owed <= 0) continue;
     const c = customer(tx.customerPhone, tx.customerName, tx.occurredAt);
@@ -181,6 +234,7 @@ export function customerLedger(items, transactions, payments, companyId, custome
     .sort((a, b) => time(b.occurredAt) - time(a.occurredAt))
     .map((tx) => ({
       transactionId: txId(tx),
+      clientTransactionId: tx.clientTransactionId,
       saleId: tx.saleId || null,
       itemName: byLocalId.get(tx.itemLocalId)?.name ?? null,
       quantity: num(tx.quantity),
@@ -191,6 +245,17 @@ export function customerLedger(items, transactions, payments, companyId, custome
       occurredAt: tx.occurredAt,
       pending: tx.syncStatus !== 'synced',
     }));
+  // Returns of this customer's credit sales: what came off what they owed (shown on the sale).
+  const cutBySale = new Map();
+  for (const tx of transactions) {
+    if (tx.type !== 'return' || tx.companyId !== companyId || tx.customerPhone !== customerPhone) continue;
+    cutBySale.set(tx.returnOf, (cutBySale.get(tx.returnOf) || 0) + returnDebtCut(tx));
+  }
+  for (const row of sales) {
+    const cut = cutBySale.get(row.clientTransactionId) || 0;
+    row.returned = cut;
+    row.owed = Math.max(0, Math.round((row.owed - cut) * 100) / 100);
+  }
   const repayments = payments
     .filter((p) => p.companyId === companyId && p.customerPhone === customerPhone)
     .sort((a, b) => time(b.occurredAt) - time(a.occurredAt))
@@ -222,6 +287,7 @@ function groupSaleLines(rows) {
     group.total = Math.round((group.total + row.total) * 100) / 100;
     group.amountPaid = Math.round((group.amountPaid + row.amountPaid) * 100) / 100;
     group.owed = Math.round((group.owed + row.owed) * 100) / 100;
+    group.returned = Math.round(((group.returned || 0) + (row.returned || 0)) * 100) / 100;
     group.pending = group.pending || row.pending;
   }
   return out;
@@ -231,16 +297,18 @@ function groupSaleLines(rows) {
 export function marginByItem(items, transactions, companyId) {
   const salesByItem = new Map();
   for (const tx of transactions) {
-    if (tx.type !== 'out') continue;
+    if (tx.type !== 'out' && tx.type !== 'return') continue;
     if (!salesByItem.has(tx.itemLocalId)) salesByItem.set(tx.itemLocalId, []);
     salesByItem.get(tx.itemLocalId).push(tx);
   }
+  // Returned units come off what was sold.
+  const sign = (t) => (t.type === 'return' ? -1 : 1);
   const report = items
     .filter((i) => i.companyId === companyId && isActive(i))
     .map((item) => {
       const sales = salesByItem.get(item.localId) || [];
-      const totalRevenue = sales.reduce((sum, t) => sum + num(t.quantity) * num(t.unitPrice), 0);
-      const totalUnitsSold = sales.reduce((sum, t) => sum + num(t.quantity), 0);
+      const totalRevenue = sales.reduce((sum, t) => sum + sign(t) * num(t.quantity) * num(t.unitPrice), 0);
+      const totalUnitsSold = sales.reduce((sum, t) => sum + sign(t) * num(t.quantity), 0);
       const estimatedCost = totalUnitsSold * num(item.lastPurchasePrice);
       return {
         itemId: item.localId,
@@ -309,11 +377,14 @@ export function businessSummary(items, transactions, companyId, range = {}, paym
   let salesWithoutCost = 0;
   const salesByItem = new Map();
   for (const tx of transactions) {
-    if (tx.type !== 'out' || tx.companyId !== companyId || !inRange(tx, range)) continue;
-    const revenue = saleTotal(tx);
+    if ((tx.type !== 'out' && tx.type !== 'return') || tx.companyId !== companyId || !inRange(tx, range)) continue;
+    // A return undoes its share of a sale: its value and its cost (at the purchase price in
+    // effect when it came back) both come off.
+    const sign = tx.type === 'return' ? -1 : 1;
+    const revenue = sign * saleTotal(tx);
     const price = purchasePriceAt(points.get(tx.itemLocalId), time(tx.occurredAt));
-    if (price) profit += revenue - num(tx.quantity) * price.amount;
-    else salesWithoutCost += 1;
+    if (price) profit += revenue - sign * num(tx.quantity) * price.amount;
+    else if (sign > 0) salesWithoutCost += 1;
     salesByItem.set(tx.itemLocalId, (salesByItem.get(tx.itemLocalId) || 0) + revenue);
   }
   let bestSeller = null;
@@ -331,6 +402,8 @@ export function businessSummary(items, transactions, companyId, range = {}, paym
     salesWithoutCost,
     cash: svp.salesByPaymentMethod.cash.revenue,
     transfer: svp.salesByPaymentMethod.transfer.revenue,
+    pos: svp.salesByPaymentMethod.pos.revenue,
+    returnsValue: svp.returnsValue,
     owedFromTheseSales: svp.salesByPaymentMethod.credit.revenue,
     repaid: svp.repayments.total,
     bestSeller,
@@ -441,6 +514,7 @@ export function companySummary(items, transactions, companyId, range = {}, payme
     margin,
     cashSalesRevenue: salesByPaymentMethod.cash.revenue,
     transferSalesRevenue: salesByPaymentMethod.transfer.revenue,
+    posSalesRevenue: salesByPaymentMethod.pos.revenue,
     outstandingDebt: debtors(transactions, payments, companyId).totals.outstanding,
   };
 }
@@ -463,9 +537,10 @@ export function oversightSummary(companies, items, transactions, { companyIds, o
       margin: acc.margin + row.margin,
       cashSalesRevenue: acc.cashSalesRevenue + row.cashSalesRevenue,
       transferSalesRevenue: acc.transferSalesRevenue + row.transferSalesRevenue,
+      posSalesRevenue: acc.posSalesRevenue + row.posSalesRevenue,
       outstandingDebt: acc.outstandingDebt + row.outstandingDebt,
     }),
-    { itemCount: 0, lowStockCount: 0, totalPurchaseCost: 0, totalSalesRevenue: 0, margin: 0, cashSalesRevenue: 0, transferSalesRevenue: 0, outstandingDebt: 0 }
+    { itemCount: 0, lowStockCount: 0, totalPurchaseCost: 0, totalSalesRevenue: 0, margin: 0, cashSalesRevenue: 0, transferSalesRevenue: 0, posSalesRevenue: 0, outstandingDebt: 0 }
   );
   return { companies: breakdown, totals };
 }

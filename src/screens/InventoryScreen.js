@@ -23,9 +23,17 @@ const CATALOG_COLUMNS = [
   { key: 'name', label: 'Name' },
   { key: 'category', label: 'Category' },
   { key: 'unit', label: 'Unit' },
+  { key: 'sellingPrice', label: 'Selling Price' },
   { key: 'lowStockThreshold', label: 'Low Stock Threshold' },
   { key: 'allowDecimal', label: 'Allow Decimal' },
 ];
+
+// A CSV "Selling Price" cell: blank or not a price = no selling price. "1,500" reads as 1500.
+function sellingPriceFromCsv(value) {
+  const text = String(value ?? '').replace(/[₦,\s]/g, '');
+  const price = Number(text);
+  return text !== '' && Number.isFinite(price) && price >= 0 ? price : null;
+}
 
 // SYNC-06: visible "All synced" / "X pending" indicator so the user always knows whether
 // their data has reached the cloud. The same screen doubles as the Main Company's read-only
@@ -134,6 +142,7 @@ export default function InventoryScreen({ navigation, route }) {
         quantityOnHand: 0,
         lowStockThreshold: Number(row['Low Stock Threshold'] || row.lowStockThreshold || 0) || 0,
         allowDecimal: /^(yes|y|true|1)$/i.test(String(row['Allow Decimal'] ?? row.allowDecimal ?? '').trim()),
+        sellingPrice: sellingPriceFromCsv(row['Selling Price'] ?? row.sellingPrice),
         lastPurchasePrice: null,
         updatedAt: new Date().toISOString(),
         syncStatus: 'pending',

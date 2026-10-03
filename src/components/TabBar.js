@@ -8,6 +8,7 @@ import { colors, fonts, shadow } from '../theme';
 const TAB_META = {
   Overview: { label: 'Overview', icon: 'home' },
   Inventory: { label: 'Inventory', icon: 'box' },
+  Sales: { label: 'Sales', icon: 'receipt' },
   Reports: { label: 'Reports', icon: 'chart' },
   AuditLog: { label: 'Audit', icon: 'list' },
   Alerts: { label: 'Alerts', icon: 'bell' },
@@ -61,7 +62,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-around', alignItems: 'flex-start', paddingTop: 9, paddingHorizontal: 8,
     backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.line,
   },
-  item: { width: 64, minHeight: 48, alignItems: 'center', gap: 4 },
+  // Shares the width so six tabs still fit on a small phone.
+  item: { flex: 1, maxWidth: 72, minHeight: 48, alignItems: 'center', gap: 4 },
   label: { fontSize: 11 },
   scanButton: {
     width: 50, height: 50, marginTop: -20, borderRadius: 17, backgroundColor: colors.ink,

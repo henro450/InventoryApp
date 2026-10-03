@@ -11,6 +11,7 @@ import {
 import { ROLES } from '../constants/roles';
 import * as math from './reportMath';
 import * as outflowMath from './outflowMath';
+import { salesHistory } from './salesMath';
 
 // Reports computed from the device's SQLite data — synced history plus this device's unsynced
 // changes — so they work offline and always include work not yet pushed. Each function returns
@@ -65,6 +66,12 @@ export function getOversightSummary(user, range = {}) {
 export function getDebtors(companyId) {
   const { transactions, payments } = load([companyId]);
   return math.debtors(transactions, payments, companyId);
+}
+
+// Every sale of one company with its returns, newest first (Sales and Sale detail screens).
+export function getSales(companyId) {
+  const { allItems, transactions } = load([companyId]);
+  return salesHistory(allItems, transactions, companyId);
 }
 
 // One customer's summary, credit sales and repayments (debtor detail screen).

@@ -41,7 +41,7 @@ export function initLocalDb() {
       itemServerId INTEGER,        -- null if the item hasn't synced yet
       itemClientItemId TEXT,       -- used to resolve the item server-side when itemServerId is null
       companyId INTEGER,
-      type TEXT NOT NULL,          -- 'in' | 'out' | 'adjustment'
+      type TEXT NOT NULL,          -- 'in' | 'out' | 'adjustment' | 'return'
       quantity REAL NOT NULL,
       unitPrice REAL,
       priceWasDefaulted INTEGER DEFAULT 0,
@@ -176,6 +176,13 @@ export function initLocalDb() {
   tryAddColumn('stock_transactions', 'customerPhone TEXT');
   // Multi-item sales: the rows of one sale share a saleId (null for single-item sales).
   tryAddColumn('stock_transactions', 'saleId TEXT');
+  // What an item normally sells for; a sale with no price typed uses it (before the last purchase price).
+  tryAddColumn('items', 'sellingPrice REAL');
+  // Mixed payments: JSON like {"cash":2000,"transfer":3000} when paymentMethod is 'mixed'.
+  tryAddColumn('stock_transactions', 'paymentBreakdown TEXT');
+  // Returns ('return' rows): the sale row's clientTransactionId and 'void' | 'return'.
+  tryAddColumn('stock_transactions', 'returnOf TEXT');
+  tryAddColumn('stock_transactions', 'returnReason TEXT');
   db.execSync(`
     CREATE INDEX IF NOT EXISTS stock_transactions_company_idx ON stock_transactions (companyId, type, occurredAt);
     CREATE INDEX IF NOT EXISTS stock_transactions_item_idx ON stock_transactions (itemLocalId);
@@ -260,15 +267,15 @@ export function setSyncCursor(userId, cursor) {
 // --- Items ---
 export function upsertLocalItem(item) {
   db.runSync(
-    `INSERT INTO items (id, localId, clientItemId, sku, name, category, unit, companyId, quantityOnHand, lowStockThreshold, lastPurchasePrice, version, updatedAt, syncStatus, userId, isActive, allowDecimal)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO items (id, localId, clientItemId, sku, name, category, unit, companyId, quantityOnHand, lowStockThreshold, lastPurchasePrice, version, updatedAt, syncStatus, userId, isActive, allowDecimal, sellingPrice)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(localId) DO UPDATE SET
        id=excluded.id, clientItemId=excluded.clientItemId, sku=excluded.sku, name=excluded.name,
        category=excluded.category, unit=excluded.unit, companyId=excluded.companyId,
        quantityOnHand=excluded.quantityOnHand, lowStockThreshold=excluded.lowStockThreshold,
        lastPurchasePrice=excluded.lastPurchasePrice, version=excluded.version, updatedAt=excluded.updatedAt,
        syncStatus=excluded.syncStatus, userId=excluded.userId, isActive=excluded.isActive,
-       allowDecimal=excluded.allowDecimal`,
+       allowDecimal=excluded.allowDecimal, sellingPrice=excluded.sellingPrice`,
     [
       item.id ?? null,
       item.localId,
@@ -287,6 +294,7 @@ export function upsertLocalItem(item) {
       item.userId ?? null,
       item.isActive === undefined || item.isActive === null ? 1 : (item.isActive ? 1 : 0),
       item.allowDecimal ? 1 : 0,
+      item.sellingPrice === null || item.sellingPrice === undefined || item.sellingPrice === '' ? null : Number(item.sellingPrice),
     ]
   );
 }
@@ -326,6 +334,7 @@ function itemOperation(item) {
         unit: item.unit,
         lowStockThreshold: item.lowStockThreshold,
         allowDecimal: !!item.allowDecimal,
+        sellingPrice: item.sellingPrice ?? null,
       }
     : {
         id: item.id,
@@ -334,6 +343,7 @@ function itemOperation(item) {
         unit: item.unit,
         lowStockThreshold: item.lowStockThreshold,
         allowDecimal: !!item.allowDecimal,
+        sellingPrice: item.sellingPrice ?? null,
       };
 
   return { operationType, payload };
@@ -450,8 +460,8 @@ export function deleteLocalItem(localId) {
 export function insertLocalTransaction(tx) {
   db.runSync(
     `INSERT INTO stock_transactions
-       (clientTransactionId, itemLocalId, itemServerId, itemClientItemId, companyId, type, quantity, unitPrice, priceWasDefaulted, occurredAt, syncStatus, userId, previousQuantity, createdByUserId, paymentMethod, amountPaid, customerName, customerPhone, saleId)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (clientTransactionId, itemLocalId, itemServerId, itemClientItemId, companyId, type, quantity, unitPrice, priceWasDefaulted, occurredAt, syncStatus, userId, previousQuantity, createdByUserId, paymentMethod, amountPaid, customerName, customerPhone, saleId, paymentBreakdown, returnOf, returnReason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       tx.clientTransactionId,
       tx.itemLocalId,
@@ -466,13 +476,21 @@ export function insertLocalTransaction(tx) {
       tx.userId ?? null,
       tx.previousQuantity ?? null,
       tx.userId ?? null,
-      tx.type === 'out' ? tx.paymentMethod || 'cash' : null,
-      tx.type === 'out' && tx.amountPaid !== undefined ? tx.amountPaid : null,
-      tx.type === 'out' ? tx.customerName || null : null,
-      tx.type === 'out' && tx.customerPhone ? normalizePhone(tx.customerPhone) : null,
-      tx.type === 'out' ? tx.saleId || null : null,
+      isSaleOrReturn(tx) ? tx.paymentMethod || 'cash' : null,
+      isSaleOrReturn(tx) && tx.amountPaid !== undefined ? tx.amountPaid : null,
+      isSaleOrReturn(tx) ? tx.customerName || null : null,
+      isSaleOrReturn(tx) && tx.customerPhone ? normalizePhone(tx.customerPhone) : null,
+      isSaleOrReturn(tx) ? tx.saleId || null : null,
+      isSaleOrReturn(tx) && tx.paymentMethod === 'mixed' && tx.paymentBreakdown ? JSON.stringify(tx.paymentBreakdown) : null,
+      tx.type === 'return' ? tx.returnOf : null,
+      tx.type === 'return' ? tx.returnReason || 'return' : null,
     ]
   );
+}
+
+// Sales and returns carry payment and customer fields; purchases and adjustments don't.
+function isSaleOrReturn(tx) {
+  return tx.type === 'out' || tx.type === 'return';
 }
 
 // Stock movement, optimistic item balance, and its outbox entry commit together. A crash can
@@ -491,6 +509,16 @@ export function saveLocalStockTransaction(tx) {
 // stock check runs for every line against the current rows; a failure names the line's item
 // via err.itemLocalId.
 export function saveLocalSale(transactions) {
+  return saveLocalTransactions(transactions);
+}
+
+// Returns of one or more sale rows (a void, or items brought back): stock goes back on each
+// item, all lines together or none.
+export function saveLocalReturn(transactions) {
+  return saveLocalTransactions(transactions);
+}
+
+function saveLocalTransactions(transactions) {
   return runLocalTransaction(() =>
     transactions.map((tx) => {
       try {
@@ -512,7 +540,7 @@ function writeLocalStockTransaction(tx) {
     if (current <= 0) throw Object.assign(new Error('Out of stock'), { code: 'OUT_OF_STOCK', available: current });
     if (tx.quantity > current) throw Object.assign(new Error('Not enough stock'), { code: 'INSUFFICIENT_STOCK', available: current });
   }
-  const nextQuantity = tx.type === 'in' ? current + tx.quantity : tx.type === 'out' ? current - tx.quantity : tx.quantity;
+  const nextQuantity = tx.type === 'in' || tx.type === 'return' ? current + tx.quantity : tx.type === 'out' ? current - tx.quantity : tx.quantity;
 
   const record = {
     ...tx,
@@ -541,11 +569,14 @@ function writeLocalStockTransaction(tx) {
       type: tx.type,
       quantity: tx.quantity,
       unitPrice: tx.unitPrice,
-      paymentMethod: tx.type === 'out' ? tx.paymentMethod || 'cash' : undefined,
-      amountPaid: tx.type === 'out' && tx.amountPaid !== null ? tx.amountPaid : undefined,
+      paymentMethod: isSaleOrReturn(tx) ? tx.paymentMethod || 'cash' : undefined,
+      paymentBreakdown: isSaleOrReturn(tx) && tx.paymentMethod === 'mixed' ? tx.paymentBreakdown : undefined,
+      amountPaid: isSaleOrReturn(tx) && tx.amountPaid !== null && tx.amountPaid !== undefined ? tx.amountPaid : undefined,
       customerName: tx.type === 'out' ? tx.customerName || undefined : undefined,
       customerPhone: tx.type === 'out' && tx.customerPhone ? normalizePhone(tx.customerPhone) : undefined,
       saleId: tx.type === 'out' && tx.saleId ? tx.saleId : undefined,
+      returnOf: tx.type === 'return' ? tx.returnOf : undefined,
+      returnReason: tx.type === 'return' ? tx.returnReason || 'return' : undefined,
       occurredAt: tx.occurredAt,
     },
   });
@@ -745,15 +776,17 @@ export function upsertPulledTransaction(tx, userId) {
   db.runSync(
     `INSERT INTO stock_transactions
        (clientTransactionId, id, itemLocalId, itemServerId, companyId, type, quantity, unitPrice, priceWasDefaulted,
-        previousQuantity, occurredAt, syncStatus, userId, createdByUserId, paymentMethod, amountPaid, customerName, customerPhone, saleId)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?, ?, ?, ?, ?, ?)
+        previousQuantity, occurredAt, syncStatus, userId, createdByUserId, paymentMethod, amountPaid, customerName, customerPhone, saleId,
+        paymentBreakdown, returnOf, returnReason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(clientTransactionId) DO UPDATE SET
        id = excluded.id, itemServerId = excluded.itemServerId, companyId = excluded.companyId, type = excluded.type,
        quantity = excluded.quantity, unitPrice = excluded.unitPrice, priceWasDefaulted = excluded.priceWasDefaulted,
        previousQuantity = excluded.previousQuantity, occurredAt = excluded.occurredAt, syncStatus = 'synced',
        createdByUserId = excluded.createdByUserId, paymentMethod = excluded.paymentMethod,
        amountPaid = excluded.amountPaid, customerName = excluded.customerName, customerPhone = excluded.customerPhone,
-       saleId = excluded.saleId`,
+       saleId = excluded.saleId, paymentBreakdown = excluded.paymentBreakdown, returnOf = excluded.returnOf,
+       returnReason = excluded.returnReason`,
     [
       tx.clientTransactionId,
       tx.id,
@@ -773,6 +806,9 @@ export function upsertPulledTransaction(tx, userId) {
       tx.customerName ?? null,
       tx.customerPhone ?? null,
       tx.saleId ?? null,
+      tx.paymentBreakdown ? JSON.stringify(tx.paymentBreakdown) : null,
+      tx.returnOf ?? null,
+      tx.returnReason ?? null,
     ]
   );
 }

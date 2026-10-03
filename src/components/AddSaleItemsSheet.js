@@ -5,6 +5,7 @@ import Icon from './Icon';
 import { Text, SearchField, IconButton, LetterTile, Pill, Button, InlineEmpty } from './ui';
 import { formatMoney, formatNumber } from '../utils/format';
 import { isLowStock } from '../utils/inventory';
+import { defaultSalePrice } from '../utils/sale';
 import { colors, fonts, type, shadow } from '../theme';
 
 // Picker for a multi-item sale: tick everything the customer is buying (quantities are set on
@@ -73,7 +74,7 @@ function PickerRow({ item, selected, onPress }) {
   const onHand = Number(item.quantityOnHand) || 0;
   const out = onHand <= 0;
   const low = !out && isLowStock(item);
-  const price = item.lastPurchasePrice;
+  const { price } = defaultSalePrice(item);
   return (
     <Pressable
       accessibilityRole="checkbox"

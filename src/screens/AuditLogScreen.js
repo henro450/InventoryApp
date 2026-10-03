@@ -12,6 +12,7 @@ import {
   Text, Screen, LargeHeader, NavHeader, IconButton, Chip, Card, DateField, Button, Banner, EmptyState, Loading,
   CompanySwitcher, ReadOnlyBanner, Pill, AccountButton,
 } from '../components/ui';
+import { describePayment } from '../utils/payments';
 import { colors, fonts, type } from '../theme';
 
 const ACTIONS = ['create', 'update', 'delete'];
@@ -64,12 +65,14 @@ function describe(log) {
       .map((k) => `${humanize(k)}: ${show(oldV[k])} → ${show(newV[k])}`);
     if (changes.length) detail = changes.join('\n');
   } else if (log.action === 'create' && newV && newV.type && newV.quantity != null) {
-    const kind = newV.type === 'in' ? 'Stock in' : newV.type === 'out' ? 'Stock out' : 'Adjustment';
+    const kind = { in: 'Stock in', out: 'Stock out', adjustment: 'Adjustment', return: newV.returnReason === 'void' ? 'Sale voided' : 'Returned' }[newV.type] || 'Stock';
     detail = `${kind} · ${newV.quantity}${newV.unitPrice != null && newV.type !== 'adjustment' ? ` × ${formatMoney(newV.unitPrice)}` : ''}${
-      newV.type === 'out' ? ` · ${newV.paymentMethod === 'transfer' ? 'Transfer' : 'Cash'}` : ''
-    }${newV.type === 'out' && newV.amountPaid != null ? ` · paid ${formatMoney(newV.amountPaid)}${newV.customerName ? `, owed by ${newV.customerName}` : ''}` : ''}`;
+      newV.type === 'out' ? ` · ${describePayment(newV.paymentMethod, newV.paymentBreakdown)}` : ''
+    }${newV.type === 'out' && newV.amountPaid != null ? ` · paid ${formatMoney(newV.amountPaid)}${newV.customerName ? `, owed by ${newV.customerName}` : ''}` : ''}${
+      newV.type === 'return' ? ` · ${formatMoney(newV.amountPaid ?? 0)} handed back (${describePayment(newV.paymentMethod, newV.paymentBreakdown)})` : ''
+    }`;
   } else if (log.action === 'create' && newV && newV.clientPaymentId && newV.amount != null) {
-    detail = `Repayment · ${formatMoney(newV.amount)} · ${newV.paymentMethod === 'transfer' ? 'Transfer' : 'Cash'}`;
+    detail = `Repayment · ${formatMoney(newV.amount)} · ${describePayment(newV.paymentMethod)}`;
   } else if (log.action === 'create' && newV && newV.clientOutflowId && newV.amount != null) {
     detail = `${KIND_META[newV.kind]?.label || 'Money out'} · ${formatMoney(newV.amount)} · ${newV.paymentMethod === 'transfer' ? 'Transfer' : 'Cash'}`;
   } else if (log.action === 'delete' && oldV && oldV.clientOutflowId && oldV.amount != null) {
