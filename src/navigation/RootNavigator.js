@@ -16,6 +16,7 @@ import AdminPaymentsScreen from '../screens/AdminPaymentsScreen';
 import AdminPaymentDetailScreen from '../screens/AdminPaymentDetailScreen';
 import SubscriptionScreen from '../screens/SubscriptionScreen';
 import { refreshSubscriptionReminders } from '../subscription/reminders';
+import { refreshStockWarnings } from '../notifications/stockWarnings';
 import InventoryScreen from '../screens/InventoryScreen';
 import AddItemScreen from '../screens/AddItemScreen';
 import StockTransactionScreen from '../screens/StockTransactionScreen';
@@ -28,6 +29,10 @@ import ScanBarcodeScreen from '../screens/ScanBarcodeScreen';
 import AlertsScreen from '../screens/AlertsScreen';
 import DebtorsScreen from '../screens/DebtorsScreen';
 import DebtorDetailScreen from '../screens/DebtorDetailScreen';
+import SuppliersScreen from '../screens/SuppliersScreen';
+import SupplierDetailScreen from '../screens/SupplierDetailScreen';
+import TransferStockScreen from '../screens/TransferStockScreen';
+import StockCountScreen from '../screens/StockCountScreen';
 import CompanyUsersScreen from '../screens/CompanyUsersScreen';
 import MoneyOutScreen from '../screens/MoneyOutScreen';
 import SavingsScreen from '../screens/SavingsScreen';
@@ -35,7 +40,7 @@ import SalesScreen from '../screens/SalesScreen';
 import SaleDetailScreen from '../screens/SaleDetailScreen';
 import SplashView from '../components/SplashView';
 import TabBar from '../components/TabBar';
-import { startConnectivityWatcher } from '../sync/syncEngine';
+import { startConnectivityWatcher, subscribeToSync } from '../sync/syncEngine';
 import { startScanToFind } from '../utils/scan';
 import { colors } from '../theme';
 
@@ -53,6 +58,13 @@ const navigationRef = createNavigationContainerRef();
 
 function openSubscription() {
   if (navigationRef.isReady()) navigationRef.navigate('Subscription');
+}
+
+// Alerts is a screen of its own for a Main Company and a tab for a Sub Company.
+function openAlerts(isMainCompany) {
+  if (!navigationRef.isReady()) return;
+  if (isMainCompany) navigationRef.navigate('Alerts');
+  else navigationRef.navigate('Home', { screen: 'Alerts' });
 }
 
 const navTheme = { ...DefaultTheme, colors: { ...DefaultTheme.colors, background: colors.ground, primary: colors.primary } };
@@ -125,6 +137,30 @@ export default function RootNavigator() {
     };
   }, [user, isCompanyAdmin, isSuperAdmin]);
 
+  // Morning low-stock and expiry notification (company admins): rescheduled on login, when the
+  // app comes to the foreground and after syncs (at most once a minute); a tap opens Alerts.
+  useEffect(() => {
+    if (!user || isSuperAdmin) return undefined;
+    const roles = { isCompanyAdmin, isSuperAdmin };
+    let last = 0;
+    const refresh = (force) => {
+      if (!force && Date.now() - last < 60000) return;
+      last = Date.now();
+      refreshStockWarnings(user, roles);
+    };
+    refresh(true);
+    const appState = AppState.addEventListener('change', (state) => state === 'active' && refresh(true));
+    const unsubscribe = subscribeToSync(() => refresh(false));
+    const tapped = Notifications.addNotificationResponseReceivedListener((response) => {
+      if (response.notification.request.content.data?.screen === 'Alerts' && isCompanyAdmin) openAlerts(isMainCompany);
+    });
+    return () => {
+      appState.remove();
+      unsubscribe();
+      tapped.remove();
+    };
+  }, [user?.id, user?.companyId, isCompanyAdmin, isSuperAdmin, isMainCompany]);
+
   if (loading) return <SplashView />;
 
   return (
@@ -154,6 +190,10 @@ export default function RootNavigator() {
             {/* People owing from part-paid/credit sales (own company; Main Company can open a Sub's read-only). */}
             <Stack.Screen name="Debtors" component={DebtorsScreen} />
             <Stack.Screen name="DebtorDetail" component={DebtorDetailScreen} />
+            {/* Suppliers and what is owed to them (credit purchases); paying them is for admins. */}
+            <Stack.Screen name="Suppliers" component={SuppliersScreen} />
+            <Stack.Screen name="SupplierDetail" component={SupplierDetailScreen} />
+            {isCompanyAdmin && <Stack.Screen name="StockCount" component={StockCountScreen} />}
             <Stack.Screen name="SaleDetail" component={SaleDetailScreen} />
             {/* Money out: admins see and record every kind; other users record expenses. */}
             <Stack.Screen name="MoneyOut" component={MoneyOutScreen} />
@@ -166,6 +206,7 @@ export default function RootNavigator() {
             {isMainCompany && isCompanyAdmin && (
               <>
                 <Stack.Screen name="Alerts" component={AlertsScreen} />
+                <Stack.Screen name="TransferStock" component={TransferStockScreen} />
                 {allowSubCompanies && (
                   <>
                     <Stack.Screen name="ManageSubCompanies" component={ManageSubCompaniesScreen} />

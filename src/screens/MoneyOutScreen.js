@@ -3,7 +3,9 @@ import { View, ScrollView, Pressable, StyleSheet, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { getMoneyOut, getSavings, getRecentCategories, getDueRepeats, visibleCompanyIds } from '../reports/localReports';
-import { getLocalCompany, updateLocalOutflow } from '../db/localDb';
+import { getLocalCompany, updateLocalOutflow, setLocalOutflowReceipt } from '../db/localDb';
+import { chooseReceiptPhoto, keepReceiptPhoto } from '../utils/receiptPhotos';
+import ReceiptPhoto from '../components/ReceiptPhoto';
 import { runSync } from '../sync/syncEngine';
 import { useLocalRefresh } from '../hooks/useLocalRefresh';
 import { formatDate, formatMoney, formatTime, plural } from '../utils/format';
@@ -134,6 +136,26 @@ export default function MoneyOutScreen({ navigation, route }) {
   }
 
   const canEdit = (e) => isCompanyAdmin && !e.auto && e.companyId === user.companyId;
+  // Whoever recorded an entry, or an admin, can add its receipt photo.
+  const canAttach = (e) => !e.auto && e.companyId === user.companyId && (isCompanyAdmin || e.createdByUserId === user.id);
+  const hasReceipt = (o) => !!(o?.receiptUri || o?.receiptMimeType);
+
+  async function attachReceipt() {
+    const entry = selected;
+    const picked = await chooseReceiptPhoto();
+    if (!picked) return;
+    let uri;
+    try {
+      uri = await keepReceiptPhoto(picked.uri, entry.outflow.clientOutflowId);
+      setLocalOutflowReceipt(entry.outflow.clientOutflowId, uri);
+    } catch (err) {
+      Alert.alert("Couldn't add the photo", err.message);
+      return;
+    }
+    setSelected({ ...entry, outflow: { ...entry.outflow, receiptUri: uri, receiptPending: 1 } });
+    load();
+    runSync(user.id);
+  }
 
   return (
     <Screen>
@@ -246,6 +268,8 @@ export default function MoneyOutScreen({ navigation, route }) {
                             <Text style={styles.pending}>Not synced</Text>
                           ) : e.auto ? (
                             <Text style={styles.auto}>Auto</Text>
+                          ) : hasReceipt(e.outflow) ? (
+                            <Icon name="camera" size={14} color={colors.ink3} />
                           ) : null}
                         </View>
                       </Pressable>
@@ -294,8 +318,26 @@ export default function MoneyOutScreen({ navigation, route }) {
               {!selected.auto && <KV label="Paid with" value={selected.outflow.paymentMethod === 'transfer' ? 'Transfer' : 'Cash'} />}
               {selected.outflow?.note && selected.outflow.note !== outflowTitle(selected) ? <KV label="Note" value={selected.outflow.note} /> : null}
               {isRepeating(selected.outflow) ? <Pill kind="primary" icon="calendar" label="Repeats every month" /> : null}
-              {selected.auto ? <Text style={type.small}>Added from a stock-in on the Inventory screen. Change it there if the cost is wrong.</Text> : null}
+              {selected.owed > 0 ? <KV label="Still owed to the supplier" value={formatMoney(selected.owed)} /> : null}
+              {selected.auto ? (
+                <Text style={type.small}>
+                  {selected.key.startsWith('sp-')
+                    ? 'A payment to a supplier, recorded on the Suppliers screen.'
+                    : 'Added from a stock-in on the Inventory screen. Change it there if the cost is wrong.'}
+                </Text>
+              ) : null}
             </View>
+            {!selected.auto && hasReceipt(selected.outflow) && <ReceiptPhoto outflow={selected.outflow} />}
+            {!selected.auto && selected.outflow?.receiptPending ? <Text style={type.caption}>The photo uploads when this phone next syncs.</Text> : null}
+            {canAttach(selected) && (
+              <Button
+                title={hasReceipt(selected.outflow) ? 'Replace receipt photo' : 'Add receipt photo'}
+                variant="secondary"
+                icon="camera"
+                height={48}
+                onPress={attachReceipt}
+              />
+            )}
             {canEdit(selected) && (
               <View style={{ gap: 10 }}>
                 {(selected.kind === 'expense' || selected.kind === 'loan' || selected.kind === 'tax') && (

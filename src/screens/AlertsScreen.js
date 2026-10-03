@@ -7,7 +7,7 @@ import { getAlerts } from '../reports/localReports';
 import { runSync } from '../sync/syncEngine';
 import { useLocalRefresh } from '../hooks/useLocalRefresh';
 import LocalDataNotice from '../components/LocalDataNotice';
-import { formatDate, formatMoney, formatPercent, cleanNumberInput, groupDigits } from '../utils/format';
+import { formatDate, formatYmd, formatMoney, formatNumber, formatPercent, cleanNumberInput, groupDigits } from '../utils/format';
 import Icon from '../components/Icon';
 import {
   Text, Screen, NavHeader, LargeHeader, IconButton, SectionTitle, CountBadge, ListCard, Card, Divider, Pill,
@@ -29,6 +29,7 @@ export default function AlertsScreen({ route, navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [lowStockItems, setLowStockItems] = useState([]);
   const [priceAnomalies, setPriceAnomalies] = useState([]);
+  const [expiring, setExpiring] = useState([]);
   const [thresholdPercent, setThresholdPercent] = useState(20);
   const [thresholdInput, setThresholdInput] = useState('20');
   const [savingThreshold, setSavingThreshold] = useState(false);
@@ -37,6 +38,7 @@ export default function AlertsScreen({ route, navigation }) {
     const data = getAlerts(companyId);
     setLowStockItems(data.lowStockItems);
     setPriceAnomalies(data.priceAnomalies);
+    setExpiring(data.expiring);
     setThresholdPercent(data.thresholdPercent);
     if (!keepInput) setThresholdInput(String(data.thresholdPercent));
     setLoading(false);
@@ -142,6 +144,40 @@ export default function AlertsScreen({ route, navigation }) {
                 </View>
               );
             })}
+          </ListCard>
+        )}
+
+        <SectionTitle title="Expiring soon" badge={<CountBadge count={expiring.length} kind="warn" />} />
+        <Text style={[type.small, { marginTop: -10 }]}>Stock on the shelf that expires within 30 days, from the dates entered at stock in.</Text>
+        {expiring.length === 0 ? (
+          <Card>
+            <View style={styles.allGood}>
+              <Icon name="check" size={18} color={colors.ok} strokeWidth={2.2} />
+              <Text style={type.small}>Nothing on the shelf expires in the next 30 days.</Text>
+            </View>
+          </Card>
+        ) : (
+          <ListCard style={{ marginTop: -6 }}>
+            {expiring.map((e, i) => (
+              <View key={`${e.itemId}-${e.expiryDate}-${i}`}>
+                {i > 0 && <Divider />}
+                <View style={styles.lowRow}>
+                  <View style={{ flex: 1, gap: 3 }}>
+                    <Text style={styles.itemName}>{e.itemName}</Text>
+                    <Text style={type.small}>
+                      {formatNumber(e.quantity)} {e.unit} · {formatMoney(e.value)} at cost
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end', gap: 2, paddingRight: 10 }}>
+                    <Pill
+                      kind={e.daysLeft <= 7 ? 'danger' : 'warn'}
+                      label={e.expired ? 'Expired' : e.daysLeft === 0 ? 'Expires today' : e.daysLeft === 1 ? '1 day left' : `${e.daysLeft} days left`}
+                    />
+                    <Text style={type.caption}>{formatYmd(e.expiryDate)}</Text>
+                  </View>
+                </View>
+              </View>
+            ))}
           </ListCard>
         )}
 

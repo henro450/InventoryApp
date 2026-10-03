@@ -40,6 +40,10 @@ export default function AddItemScreen({ navigation, route }) {
   const [sellingPrice, setSellingPrice] = useState(
     editingItem?.sellingPrice !== null && editingItem?.sellingPrice !== undefined ? String(editingItem.sellingPrice) : ''
   );
+  // Bought or sold in packs as well as single units (a carton of 24). Stock is still kept in units.
+  const [inPacks, setInPacks] = useState(Number(editingItem?.packSize) > 1);
+  const [packSize, setPackSize] = useState(Number(editingItem?.packSize) > 1 ? String(editingItem.packSize) : '');
+  const [packName, setPackName] = useState(editingItem?.packName ?? 'carton');
   const cost = editingItem?.lastPurchasePrice;
   const hasCost = cost !== null && cost !== undefined;
   const sellingNumber = sellingPrice.trim() === '' ? null : Number(sellingPrice);
@@ -61,6 +65,12 @@ export default function AddItemScreen({ navigation, route }) {
       Alert.alert('Missing info', 'SKU and name are required.');
       return;
     }
+    const size = Number(packSize);
+    if (inPacks && (!Number.isInteger(size) || size < 2)) {
+      Alert.alert('Pack size', `Enter how many ${unit || 'units'} are in one ${packName.trim() || 'pack'} (2 or more).`);
+      return;
+    }
+    const pack = inPacks ? { packSize: size, packName: packName.trim().slice(0, 40) || 'pack' } : { packSize: null, packName: null };
     setSubmitting(true);
 
     try {
@@ -73,6 +83,7 @@ export default function AddItemScreen({ navigation, route }) {
           lowStockThreshold: lowStockThreshold ? Number(lowStockThreshold) : 0,
           allowDecimal,
           sellingPrice: sellingNumber,
+          ...pack,
           updatedAt: new Date().toISOString(),
           syncStatus: 'pending',
           userId: user.id,
@@ -92,6 +103,7 @@ export default function AddItemScreen({ navigation, route }) {
           lowStockThreshold: lowStockThreshold ? Number(lowStockThreshold) : 0,
           allowDecimal,
           sellingPrice: sellingNumber,
+          ...pack,
           lastPurchasePrice: null,
           updatedAt: new Date().toISOString(),
           syncStatus: 'pending',
@@ -203,6 +215,40 @@ export default function AddItemScreen({ navigation, route }) {
             checked={allowDecimal}
             onChange={setAllowDecimal}
           />
+
+          <View style={{ gap: 12 }}>
+            <Checkbox
+              label="Also bought or sold in packs"
+              hint={`For a carton, crate or bag of several ${unit || 'units'}. Stock in and sales can then be entered in packs or single ${unit || 'units'}.`}
+              checked={inPacks}
+              onChange={setInPacks}
+            />
+            {inPacks && (
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <Field
+                  label="Pack name"
+                  value={packName}
+                  onChangeText={setPackName}
+                  placeholder="carton"
+                  autoCapitalize="none"
+                  style={{ flex: 1 }}
+                />
+                <Field
+                  label={`${unit || 'Units'} per pack`}
+                  keyboardType="number-pad"
+                  value={packSize}
+                  onChangeText={(t) => setPackSize(t.replace(/\D/g, ''))}
+                  placeholder="24"
+                  style={{ flex: 1 }}
+                />
+              </View>
+            )}
+            {inPacks && Number(packSize) > 1 && sellingNumber !== null && (
+              <Text style={type.caption}>
+                One {packName.trim() || 'pack'} of {packSize} sells for {formatMoney(sellingNumber * Number(packSize))} unless you type a price.
+              </Text>
+            )}
+          </View>
 
           <View style={{ gap: 8 }}>
             <Stepper label="Low-stock alert at" value={lowStockThreshold} onChange={setLowStockThreshold} />

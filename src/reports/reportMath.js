@@ -8,7 +8,8 @@
 // responses use it wherever the server returns an itemId.
 //
 // Price history is derived from stock transactions: the server writes a purchase price point
-// for every 'in' and a sale price point for every 'out', at the transaction's occurredAt.
+// for every 'in' (and every 'transfer_in' that carries a cost: stock moved in from another branch
+// takes the cost it had there) and a sale price point for every 'out', at the transaction's occurredAt.
 
 const num = (v) => (v === null || v === undefined || v === '' ? 0 : Number(v));
 const time = (v) => new Date(v).getTime();
@@ -78,6 +79,11 @@ export function returnDebtCut(tx) {
   return saleOwed(tx);
 }
 
+// A purchase price point: a stock-in, or stock moved in from another branch with its cost.
+function isPurchasePoint(tx) {
+  return (tx.type === 'in' || tx.type === 'transfer_in') && tx.unitPrice !== null && tx.unitPrice !== undefined;
+}
+
 function txId(tx) {
   return tx.id ?? tx.clientTransactionId;
 }
@@ -90,7 +96,7 @@ function itemIndex(items) {
 function purchasePoints(transactions, companyId) {
   const byItem = new Map();
   for (const tx of transactions) {
-    if (tx.type !== 'in' || tx.companyId !== companyId || tx.unitPrice === null || tx.unitPrice === undefined) continue;
+    if (!isPurchasePoint(tx) || tx.companyId !== companyId) continue;
     if (!byItem.has(tx.itemLocalId)) byItem.set(tx.itemLocalId, []);
     byItem.get(tx.itemLocalId).push({ amount: num(tx.unitPrice), effectiveDate: tx.occurredAt, t: time(tx.occurredAt) });
   }
@@ -224,6 +230,123 @@ export function debtors(transactions, payments, companyId) {
       totalRepaid: customers.reduce((sum, c) => sum + c.totalRepaid, 0),
     },
   };
+}
+
+// Everyone this company bought from (purchases naming a supplier's phone): what was bought, what
+// was left unpaid at the time, what's been paid since, and the balance still owed. Lists paid-up
+// suppliers too. Not date-filtered. Mirrors summarizeSuppliers on the server.
+export function suppliers(transactions, supplierPayments, companyId) {
+  const byPhone = new Map();
+  const supplier = (phone, name, at) => {
+    if (!byPhone.has(phone)) {
+      byPhone.set(phone, { supplierPhone: phone, supplierName: name, totalBought: 0, totalOwed: 0, totalPaid: 0, purchases: 0, lastActivityAt: at });
+    }
+    const s = byPhone.get(phone);
+    if (time(at) >= time(s.lastActivityAt)) {
+      s.lastActivityAt = at;
+      if (name) s.supplierName = name;
+    }
+    return s;
+  };
+  const purchases = transactions
+    .filter((tx) => tx.type === 'in' && tx.companyId === companyId && tx.supplierPhone)
+    .sort((a, b) => time(a.occurredAt) - time(b.occurredAt));
+  for (const tx of purchases) {
+    const s = supplier(tx.supplierPhone, tx.supplierName, tx.occurredAt);
+    s.totalBought += saleTotal(tx);
+    s.totalOwed += saleOwed(tx);
+    s.purchases += 1;
+  }
+  const paid = supplierPayments.filter((p) => p.companyId === companyId).sort((a, b) => time(a.occurredAt) - time(b.occurredAt));
+  for (const p of paid) {
+    const s = supplier(p.supplierPhone, p.supplierName, p.occurredAt);
+    s.totalPaid += num(p.amount);
+  }
+  const round = (n) => Math.round(n * 100) / 100;
+  const list = [...byPhone.values()]
+    .map((s) => ({ ...s, totalBought: round(s.totalBought), totalOwed: round(s.totalOwed), balance: round(s.totalOwed - s.totalPaid) }))
+    .sort((a, b) => b.balance - a.balance || a.supplierName.localeCompare(b.supplierName));
+  const owed = list.filter((s) => s.balance > 0);
+  return {
+    suppliers: list,
+    totals: {
+      outstanding: round(owed.reduce((sum, s) => sum + s.balance, 0)),
+      suppliersOwed: owed.length,
+      totalPaid: round(list.reduce((sum, s) => sum + s.totalPaid, 0)),
+    },
+  };
+}
+
+// One supplier's purchases and the payments made to them, newest first.
+export function supplierLedger(items, transactions, supplierPayments, companyId, supplierPhone) {
+  const byLocalId = itemIndex(items);
+  const purchases = transactions
+    .filter((tx) => tx.type === 'in' && tx.companyId === companyId && tx.supplierPhone === supplierPhone)
+    .sort((a, b) => time(b.occurredAt) - time(a.occurredAt))
+    .map((tx) => ({
+      transactionId: txId(tx),
+      itemName: byLocalId.get(tx.itemLocalId)?.name ?? null,
+      unit: byLocalId.get(tx.itemLocalId)?.unit ?? null,
+      quantity: num(tx.quantity),
+      total: saleTotal(tx),
+      amountPaid: salePaid(tx),
+      owed: saleOwed(tx),
+      expiryDate: tx.expiryDate || null,
+      occurredAt: tx.occurredAt,
+      pending: tx.syncStatus !== 'synced',
+    }));
+  const payments = supplierPayments
+    .filter((p) => p.companyId === companyId && p.supplierPhone === supplierPhone)
+    .sort((a, b) => time(b.occurredAt) - time(a.occurredAt))
+    .map((p) => ({ id: p.id ?? p.clientPaymentId, amount: num(p.amount), paymentMethod: p.paymentMethod, occurredAt: p.occurredAt, pending: p.syncStatus !== 'synced' }));
+  return { purchases, payments };
+}
+
+// Stock that expires soon or already has, from the expiry dates recorded on stock-ins. What's on
+// hand is assumed to be the most recent deliveries (older stock sells first), so a batch counts
+// only for the part of it still on the shelf. Device only; no server twin.
+export function expiringStock(items, transactions, companyId, { now = new Date(), withinDays = 30 } = {}) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const batchesByItem = new Map();
+  for (const tx of transactions) {
+    if (tx.type !== 'in' || tx.companyId !== companyId || !tx.expiryDate) continue;
+    if (!batchesByItem.has(tx.itemLocalId)) batchesByItem.set(tx.itemLocalId, []);
+    batchesByItem.get(tx.itemLocalId).push(tx);
+  }
+  // Every stock-in counts towards what's on hand, dated or not, newest first.
+  const deliveriesByItem = new Map();
+  for (const tx of transactions) {
+    if (tx.type !== 'in' || tx.companyId !== companyId || !batchesByItem.has(tx.itemLocalId)) continue;
+    if (!deliveriesByItem.has(tx.itemLocalId)) deliveriesByItem.set(tx.itemLocalId, []);
+    deliveriesByItem.get(tx.itemLocalId).push(tx);
+  }
+  const rows = [];
+  for (const item of items) {
+    if (item.companyId !== companyId || !isActive(item) || !deliveriesByItem.has(item.localId)) continue;
+    let left = num(item.quantityOnHand);
+    const deliveries = deliveriesByItem.get(item.localId).sort((a, b) => time(b.occurredAt) - time(a.occurredAt));
+    for (const tx of deliveries) {
+      if (left <= 0) break;
+      const onShelf = Math.min(left, num(tx.quantity));
+      left -= onShelf;
+      if (!tx.expiryDate) continue;
+      const [y, m, d] = String(tx.expiryDate).slice(0, 10).split('-').map(Number);
+      const expires = new Date(y, m - 1, d).getTime();
+      const daysLeft = Math.round((expires - today) / 86400000);
+      if (daysLeft > withinDays) continue;
+      rows.push({
+        itemId: item.localId,
+        itemName: item.name,
+        unit: item.unit,
+        quantity: Math.round(onShelf * 100) / 100,
+        expiryDate: String(tx.expiryDate).slice(0, 10),
+        daysLeft,
+        expired: daysLeft < 0,
+        value: Math.round(onShelf * num(tx.unitPrice) * 100) / 100,
+      });
+    }
+  }
+  return rows.sort((a, b) => a.daysLeft - b.daysLeft || a.itemName.localeCompare(b.itemName));
 }
 
 // One customer's credit sales and repayments, newest first.
@@ -440,11 +563,11 @@ export function discrepancies(items, transactions, companyId, range = {}) {
 // PRC-04: purchase and sale price points for one item, oldest first.
 export function priceTrend(transactions, companyId, { itemId, priceType } = {}) {
   const history = transactions
-    .filter((tx) => tx.companyId === companyId && tx.itemLocalId === itemId && (tx.type === 'in' || tx.type === 'out'))
+    .filter((tx) => tx.companyId === companyId && tx.itemLocalId === itemId && (isPurchasePoint(tx) || tx.type === 'out'))
     .filter((tx) => tx.unitPrice !== null && tx.unitPrice !== undefined)
     .map((tx) => ({
       id: txId(tx),
-      priceType: tx.type === 'in' ? 'purchase' : 'sale',
+      priceType: tx.type === 'out' ? 'sale' : 'purchase',
       amount: num(tx.unitPrice),
       effectiveDate: tx.occurredAt,
     }))
@@ -464,7 +587,7 @@ export function alerts(items, transactions, companyId, thresholdPercent = 20) {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const recentPurchases = transactions
-    .filter((tx) => tx.type === 'in' && tx.companyId === companyId && tx.unitPrice !== null && tx.unitPrice !== undefined)
+    .filter((tx) => isPurchasePoint(tx) && tx.companyId === companyId)
     .sort((a, b) => time(b.occurredAt) - time(a.occurredAt))
     .slice(0, 500);
 

@@ -1,9 +1,10 @@
 import React from 'react';
 import { View, Pressable, TextInput, StyleSheet } from 'react-native';
 import Icon from './Icon';
-import { Text, ListCard, LetterTile, IconButton, CountBadge } from './ui';
+import { Text, ListCard, LetterTile, IconButton, CountBadge, Chip } from './ui';
 import { formatMoney, formatNumber, cleanNumberInput, cleanQuantityInput, quantityStep, groupDigits } from '../utils/format';
 import { defaultSalePrice } from '../utils/sale';
+import { hasPacks, packLabel, packPrice, formatStock, unitOptions } from '../utils/pack';
 import { colors, fonts, type } from '../theme';
 
 // The items in a sale (stock out): one row per item with its quantity and optional sale price.
@@ -60,10 +61,13 @@ export default function SaleLines({ lines, calcs, onChange, onRemove, onAdd }) {
 
 function SaleLine({ line, calc, first, onChange, onRemove }) {
   const { item } = line;
+  const packs = hasPacks(item);
+  const inPacks = packs && !!line.inPacks;
   const qty = Number(line.quantity) || 0;
-  const step = quantityStep(item); // 0.5 for items that allow decimals, else 1
+  const step = inPacks ? 1 : quantityStep(item); // 0.5 for items that allow decimals, else 1
   const stepTo = (next) => onChange({ quantity: String(Math.round(next * 100) / 100) });
   const fallback = defaultSalePrice(item);
+  const placeholderPrice = inPacks ? packPrice(fallback.price, item) : fallback.price;
   return (
     <View style={[styles.line, !first && styles.lineBorder, calc.error && { backgroundColor: colors.dangerSoft }]}>
       <View style={styles.lineHead}>
@@ -73,11 +77,25 @@ function SaleLine({ line, calc, first, onChange, onRemove }) {
             {item.name}
           </Text>
           <Text style={type.caption} numberOfLines={1}>
-            <Text style={type.mono}>{item.sku}</Text> · {formatNumber(item.quantityOnHand)} {item.unit} on hand
+            <Text style={type.mono}>{item.sku}</Text> · {formatStock(item.quantityOnHand, item)} on hand
           </Text>
         </View>
         <IconButton icon="x" label={`Remove ${item.name}`} variant="ghost" size={36} iconSize={18} onPress={onRemove} />
       </View>
+
+      {packs && (
+        <View style={styles.units}>
+          {unitOptions(item).map((o) => (
+            <Chip
+              key={o.key}
+              label={o.label}
+              active={(o.key === 'pack') === inPacks}
+              // Switching unit keeps the number typed but clears a typed price (it was per the other unit).
+              onPress={() => (o.key === 'pack') !== inPacks && onChange({ inPacks: o.key === 'pack', unitPrice: '' })}
+            />
+          ))}
+        </View>
+      )}
 
       <View style={styles.controls}>
         <View style={styles.stepper}>
@@ -93,7 +111,7 @@ function SaleLine({ line, calc, first, onChange, onRemove }) {
           <TextInput
             value={groupDigits(cleanQuantityInput(line.quantity, item.allowDecimal))}
             onChangeText={(t) => onChange({ quantity: cleanQuantityInput(t, item.allowDecimal) })}
-            keyboardType={item.allowDecimal ? 'decimal-pad' : 'number-pad'}
+            keyboardType={item.allowDecimal && !inPacks ? 'decimal-pad' : 'number-pad'}
             selectTextOnFocus
             placeholder="0"
             placeholderTextColor={colors.placeholder}
@@ -115,12 +133,14 @@ function SaleLine({ line, calc, first, onChange, onRemove }) {
             value={groupDigits(cleanNumberInput(line.unitPrice))}
             onChangeText={(t) => onChange({ unitPrice: cleanNumberInput(t) })}
             keyboardType="decimal-pad"
-            placeholder={fallback.price !== null ? groupDigits(String(fallback.price)) : 'Sale price'}
+            placeholder={placeholderPrice !== null ? groupDigits(String(placeholderPrice)) : 'Sale price'}
             placeholderTextColor={colors.placeholder}
-            accessibilityLabel={`Sale price per unit for ${item.name}`}
+            accessibilityLabel={`Sale price per ${inPacks ? packLabel(item) : 'unit'} for ${item.name}`}
             style={styles.priceInput}
           />
-          <Text style={[styles.priceAffix, { fontSize: 12 }]}>each</Text>
+          <Text style={[styles.priceAffix, { fontSize: 12 }]} numberOfLines={1}>
+            {inPacks ? `/ ${packLabel(item)}` : 'each'}
+          </Text>
         </View>
       </View>
 
@@ -135,7 +155,9 @@ function SaleLine({ line, calc, first, onChange, onRemove }) {
             <Text style={[type.caption, { color: colors.warn, flex: 1 }]}>At cost price, no profit. Type the sale price.</Text>
           ) : (
             <Text style={type.caption}>
-              {formatNumber(calc.qty)} × {formatMoney(calc.price)}
+              {inPacks
+                ? `${formatNumber(qty)} ${packLabel(item, qty)} = ${formatNumber(calc.qty)} ${item.unit}`
+                : `${formatNumber(calc.qty)} × ${formatMoney(calc.price)}`}
             </Text>
           )}
           <Text style={styles.total}>{calc.total !== null ? formatMoney(calc.total) : '—'}</Text>
@@ -153,6 +175,7 @@ const styles = StyleSheet.create({
   lineBorder: { borderTopWidth: 1, borderTopColor: colors.lineSoft },
   lineHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   name: { fontFamily: fonts.semibold, fontSize: 15, lineHeight: 19 },
+  units: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   controls: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   stepper: {
     flexDirection: 'row', alignItems: 'center', height: 44, padding: 3, borderWidth: 1, borderColor: colors.lineStrong,

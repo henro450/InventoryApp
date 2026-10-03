@@ -5,6 +5,7 @@ import {
   getAllLocalItemsForCompanies,
   getLocalTransactions,
   getLocalDebtPayments,
+  getLocalSupplierPayments,
   getLocalOutflows,
   getLocalSavingsGoals,
 } from '../db/localDb';
@@ -84,7 +85,32 @@ export function getCustomerDebt(companyId, customerPhone) {
 export function getAlerts(companyId) {
   const { allItems, transactions } = load([companyId]);
   const company = getLocalCompany(companyId);
-  return math.alerts(allItems, transactions, companyId, company?.priceAnomalyThresholdPercent ?? 20);
+  return {
+    ...math.alerts(allItems, transactions, companyId, company?.priceAnomalyThresholdPercent ?? 20),
+    expiring: math.expiringStock(allItems, transactions, companyId),
+  };
+}
+
+// Suppliers and what this company owes them (Suppliers screen).
+export function getSuppliers(companyId) {
+  return math.suppliers(getLocalTransactions([companyId]), getLocalSupplierPayments([companyId]), companyId);
+}
+
+// One supplier's summary, purchases and payments (supplier detail screen).
+export function getSupplierLedger(companyId, supplierPhone) {
+  const allItems = getAllLocalItemsForCompanies([companyId]);
+  const transactions = getLocalTransactions([companyId]);
+  const payments = getLocalSupplierPayments([companyId]);
+  const summary = math.suppliers(transactions, payments, companyId).suppliers.find((s) => s.supplierPhone === supplierPhone) || null;
+  return { supplier: summary, ...math.supplierLedger(allItems, transactions, payments, companyId, supplierPhone) };
+}
+
+// Low stock and expiring stock for the daily notification (own company only).
+// `days` lists the mornings to warn about (expiry is worked out for each of them).
+export function getStockWarnings(companyId, days = [new Date()]) {
+  const { items, allItems, transactions } = load([companyId]);
+  const lowStock = math.stockOnHand(items, companyId).filter((i) => Number(i.quantityOnHand) <= Number(i.lowStockThreshold));
+  return days.map((now) => ({ now, lowStock, expiring: math.expiringStock(allItems, transactions, companyId, { now, withinDays: 14 }) }));
 }
 
 // Everything that went out of the visible companies in a period (Money out screen and the
@@ -93,7 +119,9 @@ export function getMoneyOut(user, range = {}, companyIds = visibleCompanyIds(use
   const allItems = getAllLocalItemsForCompanies(companyIds);
   const transactions = getLocalTransactions(companyIds);
   const outflows = getLocalOutflows(companyIds);
-  const entries = outflowMath.outflowEntries(transactions, outflows, companyIds, range, new Map(allItems.map((i) => [i.localId, i])));
+  const entries = outflowMath.outflowEntries(
+    transactions, outflows, companyIds, range, new Map(allItems.map((i) => [i.localId, i])), getLocalSupplierPayments(companyIds)
+  );
   return { entries, totals: outflowMath.outflowTotals(entries) };
 }
 

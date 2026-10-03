@@ -25,7 +25,7 @@ export function setUnauthorizedHandler(fn) {
   unauthorizedHandler = fn;
 }
 
-async function request(path, { method = 'GET', body, auth = true } = {}) {
+async function request(path, { method = 'GET', body, auth = true, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (auth) {
     const token = await getToken();
@@ -35,7 +35,7 @@ async function request(path, { method = 'GET', body, auth = true } = {}) {
   // A bad connection can leave fetch hanging for minutes; give up after 15s so screens fall
   // back to the data on this phone instead of spinning. Network failures carry no `status`.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res;
   try {
     res = await fetch(`${API_BASE_URL}${path}`, {
@@ -97,6 +97,10 @@ export const api = {
   // Company admins: subscription and proof of payment.
   getSubscription: () => request('/subscription'),
   uploadSubscriptionPayment: (payload) => request('/subscription/payments', { method: 'POST', body: payload }),
+
+  // Receipt photo of a money-out entry (base64 image, max 5 MB).
+  uploadOutflowReceipt: (clientOutflowId, dataBase64) =>
+    request(`/money-outflows/${encodeURIComponent(clientOutflowId)}/receipt`, { method: 'PUT', body: { dataBase64 }, timeoutMs: 60000 }),
 
   getMyCompany: () => request('/companies/mine'),
   getMe: () => request('/auth/me'),

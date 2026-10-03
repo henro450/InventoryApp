@@ -7,7 +7,13 @@ import { type } from '../theme';
 
 // Who is paying part (or owes the whole sale). "Choose from contacts" fills the fields from the
 // phone's contacts; for someone who isn't in the contacts, type the name and number directly.
-export default function CustomerSheet({ visible, initial, onClose, onSave }) {
+// The wording can be changed for other people (the stock-in screen uses it for suppliers).
+export default function CustomerSheet({
+  visible, initial, onClose, onSave,
+  title = 'Who is paying?',
+  description = 'The balance will be recorded against this customer so you can follow it up.',
+  who = 'customer',
+}) {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [error, setError] = useState(null);
@@ -37,7 +43,7 @@ export default function CustomerSheet({ visible, initial, onClose, onSave }) {
 
   function handleSave() {
     if (!name.trim()) {
-      setError("Enter the customer's name.");
+      setError(`Enter the ${who}'s name.`);
       return;
     }
     if (!isValidPhone(phone)) {
@@ -51,12 +57,12 @@ export default function CustomerSheet({ visible, initial, onClose, onSave }) {
     <Sheet
       visible={visible}
       onClose={onClose}
-      title="Who is paying?"
-      description="The balance will be recorded against this customer so you can follow it up."
+      title={title}
+      description={description}
       footer={
         <>
           <Button title="Cancel" variant="secondary" style={{ flex: 1 }} onPress={onClose} />
-          <Button title="Save customer" style={{ flex: 1 }} onPress={handleSave} />
+          <Button title={`Save ${who}`} style={{ flex: 1 }} onPress={handleSave} />
         </>
       }
     >
@@ -64,7 +70,7 @@ export default function CustomerSheet({ visible, initial, onClose, onSave }) {
       <View style={{ gap: 4, alignItems: 'center' }}>
         <Text style={type.caption}>or type their details</Text>
       </View>
-      <Field label="Customer name" leadingIcon="user" placeholder="Full name" autoCapitalize="words" value={name} onChangeText={setName} />
+      <Field label={`${who.charAt(0).toUpperCase()}${who.slice(1)} name`} leadingIcon="user" placeholder="Full name" autoCapitalize="words" value={name} onChangeText={setName} />
       <Field
         label="Phone number"
         leadingIcon="phone"

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, SectionList, StyleSheet, RefreshControl, ScrollView } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../api/client';
-import { getLastSyncedAt, getCached, setCached, getOutboxForCompany, getLocalItemByLocalId } from '../db/localDb';
+import { getLastSyncedAt, getCached, setCached, getOutboxForCompany, getLocalItemByLocalId, getLocalTransferRows } from '../db/localDb';
 import { useLocalRefresh } from '../hooks/useLocalRefresh';
 import { ROLES } from '../constants/roles';
 import { formatDate, formatDateTime, formatMoney, formatTime, formatYmd, lastSyncedLabel, rangeBounds, dateToYmd } from '../utils/format';
@@ -52,10 +52,12 @@ function show(v) {
 // Turn a raw audit row into something readable: what it was about, and what changed.
 function describe(log) {
   const oldV = parse(log.oldValue);
-  const newV = parse(log.newValue);
+  // Stock movements are logged as { transaction, itemQuantityOnHand }.
+  const rawNew = parse(log.newValue);
+  const newV = rawNew?.transaction?.type ? rawNew.transaction : rawNew;
   const snapshot = newV || oldV || {};
   const outflowName = snapshot.clientOutflowId ? snapshot.category || KIND_META[snapshot.kind]?.short : null;
-  const subject = snapshot.name || snapshot.itemName || snapshot.companyName || outflowName || `${humanize(log.entityType || 'Record')} #${log.entityId}`;
+  const subject = snapshot.name || snapshot.itemName || snapshot.supplierName || snapshot.companyName || outflowName || `${humanize(log.entityType || 'Record')} #${log.entityId}`;
 
   let detail = null;
   if (log.action === 'update' && oldV && newV) {
@@ -65,12 +67,19 @@ function describe(log) {
       .map((k) => `${humanize(k)}: ${show(oldV[k])} → ${show(newV[k])}`);
     if (changes.length) detail = changes.join('\n');
   } else if (log.action === 'create' && newV && newV.type && newV.quantity != null) {
-    const kind = { in: 'Stock in', out: 'Stock out', adjustment: 'Adjustment', return: newV.returnReason === 'void' ? 'Sale voided' : 'Returned' }[newV.type] || 'Stock';
+    const kind = {
+      in: 'Stock in', out: 'Stock out', adjustment: 'Adjustment', return: newV.returnReason === 'void' ? 'Sale voided' : 'Returned',
+      transfer_out: 'Moved to another branch', transfer_in: 'Moved in from another branch', transfer: 'Moved between branches',
+    }[newV.type] || 'Stock';
     detail = `${kind} · ${newV.quantity}${newV.unitPrice != null && newV.type !== 'adjustment' ? ` × ${formatMoney(newV.unitPrice)}` : ''}${
       newV.type === 'out' ? ` · ${describePayment(newV.paymentMethod, newV.paymentBreakdown)}` : ''
+    }${newV.type === 'in' && newV.supplierName ? ` · from ${newV.supplierName}` : ''}${
+      newV.type === 'in' && newV.amountPaid != null ? ` · paid ${formatMoney(newV.amountPaid)}` : ''
     }${newV.type === 'out' && newV.amountPaid != null ? ` · paid ${formatMoney(newV.amountPaid)}${newV.customerName ? `, owed by ${newV.customerName}` : ''}` : ''}${
       newV.type === 'return' ? ` · ${formatMoney(newV.amountPaid ?? 0)} handed back (${describePayment(newV.paymentMethod, newV.paymentBreakdown)})` : ''
     }`;
+  } else if (log.action === 'create' && newV && newV.clientPaymentId && newV.supplierPhone && newV.amount != null) {
+    detail = `Paid supplier · ${formatMoney(newV.amount)} · ${describePayment(newV.paymentMethod)}`;
   } else if (log.action === 'create' && newV && newV.clientPaymentId && newV.amount != null) {
     detail = `Repayment · ${formatMoney(newV.amount)} · ${describePayment(newV.paymentMethod)}`;
   } else if (log.action === 'create' && newV && newV.clientOutflowId && newV.amount != null) {
@@ -86,6 +95,7 @@ function describe(log) {
 // server audit entry; they're listed first as "Waiting to sync".
 const PENDING_ACTION = {
   'item.create': 'create', 'item.update': 'update', 'item.delete': 'delete', 'stock_transaction.create': 'create', 'debt_payment.create': 'create',
+  'supplier_payment.create': 'create', 'stock_transfer.create': 'create',
   'money_outflow.create': 'create', 'money_outflow.update': 'update', 'money_outflow.delete': 'delete',
   'savings_goal.create': 'create', 'savings_goal.update': 'update',
 };
@@ -104,6 +114,33 @@ function pendingLogs(user, companyId) {
         role: user.role,
         occurredAt: op.payload.occurredAt || op.createdAt,
         newValue: { ...op.payload, name: op.payload.customerName },
+      };
+    }
+    if (op.entityType === 'supplier_payment') {
+      return {
+        id: `pending-${op.operationId}`,
+        pending: true,
+        action: 'create',
+        entityType: 'SupplierPayment',
+        entityId: op.entityLocalId,
+        userId: user.id,
+        role: user.role,
+        occurredAt: op.payload.occurredAt || op.createdAt,
+        newValue: op.payload,
+      };
+    }
+    if (op.entityType === 'stock_transfer') {
+      const moved = getLocalTransferRows(op.payload.transferId).find((t) => t.type === 'transfer_out');
+      return {
+        id: `pending-${op.operationId}`,
+        pending: true,
+        action: 'create',
+        entityType: 'StockTransaction',
+        entityId: op.entityLocalId,
+        userId: user.id,
+        role: user.role,
+        occurredAt: op.payload.occurredAt || op.createdAt,
+        newValue: { type: 'transfer', quantity: op.payload.quantity, itemName: moved ? getLocalItemByLocalId(moved.itemLocalId)?.name : undefined },
       };
     }
     if (op.entityType === 'money_outflow' || op.entityType === 'savings_goal') {
